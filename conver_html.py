@@ -227,14 +227,17 @@ def get_html():
     }
 
     # Find the closest figure for each div
+    prev_figure_tag = None
     for div_id, div_info in div_ids_dict.items():
         div_obj = div_info["div_obj"]
-        figure_tag = div_obj.find_next("figure")
+        figure_tag = div_obj.find_next("figure", class_="ltx_figure")
         if figure_tag:
             div_info["figure_id"] = figure_tag.get("id", "")
             div_info["figure"] = str(figure_tag)
+            prev_figure_tag = figure_tag
         else:
-            div_info["figure"] = None
+            div_info["figure"] = str(prev_figure_tag) if prev_figure_tag else ""
+            div_info["figure_id"] = prev_figure_tag.get("id", "") if prev_figure_tag else ""
 
     # Check if in the div html is <a class="ltx_ref" href="https://arxiv.org/html/2412.06787v2#FIG_ID">
     for div_id, div_info in div_ids_dict.items():
@@ -255,6 +258,7 @@ def get_html():
     for div_id, div_info in div_ids_dict.items():
         div_html = div_info["html"]
         div_soup = BeautifulSoup(div_html, "html.parser")
+        div_html_str = str(div_soup)
 
         # Replace all math parts with their spoken text versions
         for math_tag in div_soup.find_all("math"):
@@ -294,10 +298,10 @@ def get_html():
         for sentence in div_ids_dict[div_id]["sentences"]:
             words = sentence.split()
             highlighted_div_html, start_highlight_index = mark_words_in_html(
-                str(div_soup), words, start_highlight_index
+                str(div_html_str), words, start_highlight_index
             )
             highlighted_divs.append(highlighted_div_html)
-            print(div_id, start_highlight_index)
+            # print(div_id, start_highlight_index)
 
         div_ids_dict[div_id]["highlighted_html"] = highlighted_divs
 
