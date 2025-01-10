@@ -18,8 +18,19 @@ from collections import deque
 import logging
 
 
-# tts = TTS("tts_models/en/vctk/vits")
-tts = TTS("tts_models/en/jenny/jenny")
+class ReadingStatus:
+    def __init__(self):
+        self.div_idx = 0
+        self.sentence_idx = 0
+        self.current_reading_status = "READY"
+        self.current_play_state = "PAUSED"
+        self.update_flag = False
+
+
+def get_tts_model():
+    tts = TTS("tts_models/en/jenny/jenny")
+
+    return tts
 
 
 def incr_sentence_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict):
@@ -170,60 +181,12 @@ def get_selected_content(div_ids_list, div_ids_dict, div_idx, sentence_idx):
     }
 
 
-# Initialize the app
-app = dash.Dash(
-    __name__,
-    external_stylesheets=[
-        dbc.themes.BOOTSTRAP,
-        "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css",
-        "https://arxiv.org/static/browse/0.3.4/css/ar5iv.0.7.9.min.css",
-        "https://arxiv.org/static/browse/0.3.4/css/ar5iv-fonts.0.7.9.min.css",
-        "https://arxiv.org/static/browse/0.3.4/css/latexml_styles.css",
-    ],
-)
-
-logging.getLogger("werkzeug").setLevel(logging.WARN)
-
-
-# Example HTML content as strings
-html_left = "<h3>Left Section</h3><p>This is the left section with some HTML content.</p>"
-html_right = "<h3>Right Section</h3><p>This is the right section with some HTML content.</p>"
-html_bottom = "<p>This is the bottom 10% section, rendered with HTML content.</p>"
-
-div_ids_list, div_ids_dict = get_html()
-
-div_idx = 0
-sentence_idx = 0
-
-current_reading_status = "READY"
-current_play_state = "PAUSED"
-
-
-div_id = div_ids_list[div_idx]
-
-html_left = div_ids_dict[div_id]["html"]
-html_right = div_ids_dict[div_id]["figure"]
-
-sentences = div_ids_dict[div_id]["sentences"]
-html_bottom = f"<b>{sentences[0]}</b>\n<br>{sentences[1]}\n<br>{sentences[2]}\n"
-
-sec_title = div_ids_dict[div_id]["title"]
-
-# Shared trigger variable for the callback
-update_flag = False
-
-wav_dict = {}
-
-
-def thread_turn_sentence_to_audio(src_queue, tgt_queue):
-    global wav_dict
+def thread_turn_sentence_to_audio(tts, wav_dict, div_ids_list, div_ids_dict, reading_status):
 
     while True:
-        # if src_queue:
-        # s_queue_dict = src_queue.popleft()  # Pop a sentence from the queue
 
-        next_div_idx = div_idx
-        next_sentence_idx = sentence_idx
+        next_div_idx = reading_status.div_idx
+        next_sentence_idx = reading_status.sentence_idx
 
         print(f"Next div_idx: {next_div_idx}, Next sentence_idx: {next_sentence_idx}")
 
@@ -237,6 +200,8 @@ def thread_turn_sentence_to_audio(src_queue, tgt_queue):
             next_div_idx, next_sentence_idx = incr_sentence_idx(
                 next_div_idx, next_sentence_idx, div_ids_list, div_ids_dict
             )
+            if next_div_idx >= len(div_ids_list):
+                break
             next_div_id = div_ids_list[next_div_idx]
 
         sentence = div_ids_dict[next_div_id]["sentences_spoken"][next_sentence_idx]
@@ -254,358 +219,372 @@ def thread_turn_sentence_to_audio(src_queue, tgt_queue):
 
         wav_dict[(next_div_id, next_sentence_idx)] = wav
 
-        # tgt_queue.append({"div_id": div_id, "sentence_id": sentence_id, "wav": wav})
 
-
-# Initialize a deque to act as the sentence queue
-sentence_queue = deque()
-wav_queue = deque()
-next_queue = deque()
-
-
-for div_id_ in div_ids_list:
-    for s_id, sentence in enumerate(div_ids_dict[div_id_]["sentences_spoken"]):
-        sentence_queue.append({"div_id": div_id_, "sentence": sentence, "sentence_id": s_id})
-
-
-tts_thread = threading.Thread(target=thread_turn_sentence_to_audio, args=(sentence_queue, wav_queue), daemon=True)
-tts_thread.start()
-
-
-def async_highlight_trigger():
+def async_highlight_trigger(wav_dict, next_queue, reading_status):
     """Runs a background process that waits for a random time and sets the update flag."""
-    global update_flag, current_play_state, wav_queue, next_queue, current_reading_status, wav_dict
 
     next_keys = None
 
     while True:
-
-        # if wav_queue:
-        #     s_wav_dict = wav_queue.popleft()
-
-        #     div_id = s_wav_dict["div_id"]
-        #     sentence_id = s_wav_dict["sentence_id"]
-        #     wav = s_wav_dict["wav"]
-
-        #     wav_dict[(div_id, sentence_id)] = wav
-
-        # Sleep for a random time (up to 3 seconds)
-        # time.sleep(random.random() * 2)
         if next_queue:
             if not next_keys:
                 next_keys = next_queue.popleft()
                 print(f"Processing sentence: {next_keys}")
-                # time.sleep(1 + random.random() * 2)
 
         if next_keys:
-
             if next_keys in wav_dict:
                 sd.play(wav_dict[next_keys], blocking=True, samplerate=44000)
-                update_flag = True
-                current_reading_status = "READ_TEXT"
-                # del wav_dict[next_keys]
+                reading_status.update_flag = True
+                reading_status.current_reading_status = "READ_TEXT"
+                del wav_dict[next_keys]
                 next_keys = None
             else:
                 time.sleep(0.5)
-                pass
-                # print("Waiting for the audio to be generated...")
-                # next_key_processing_dict = {
-                #     "div_id": next_keys[0],
-                #     "sentence": div_ids_dict[next_keys[0]]["sentences_spoken"][next_keys[1]],
-                #     "sentence_id": next_keys[1],
-                # }
-                # sentence_queue.appendleft(next_key_processing_dict)
-                # time.sleep(0.1)
         else:
             time.sleep(0.5)
 
 
-# Start the background thread
-trigger_thread = threading.Thread(target=async_highlight_trigger, daemon=True)
-trigger_thread.start()
-
-
-# Example function to add sentences to the queue
-def add_sentence_to_queue(idx_tuple):
-    next_queue.append(idx_tuple)
-    print(f"Added sentence to queue: {idx_tuple}")
-
-
-# Add some example sentences to the queue
-# add_sentence_to_queue((div_id, sentence_idx))
-
-
-app.layout = html.Div(
-    [
-        # Top section: split into two parts (60% left, 40% right)
-        html.Div(
-            [
-                # Left section (60%)
-                html.Div(
-                    [
-                        html.Div(
-                            html.H2(
-                                sec_title,
+def set_app_layout(app, sec_title, html_left, html_right, html_bottom):
+    app.layout = html.Div(
+        [
+            # Top section: split into two parts (60% left, 40% right)
+            html.Div(
+                [
+                    # Left section (60%)
+                    html.Div(
+                        [
+                            html.Div(
+                                html.H2(
+                                    sec_title,
+                                ),
+                                id="pap_title",
                             ),
-                            id="pap_title",
-                        ),
-                        html.Div(
-                            dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_left),
-                            style={
-                                "display": "inline-block",
-                                "vertical-align": "top",
-                                "padding": "10px",
-                            },
-                            id="pap_content",
-                        ),
-                        html.Div(
-                            # "Controls",
-                            [
-                                html.Div(f"{div_idx}", id="inp_div_id", style={"width": "2rem"}),
-                                html.Div(f"{sentence_idx}", id="inp_sentence_id", style={"width": "2rem"}),
-                                html.Button("<<", id="button_div_bckwrd"),
-                                html.Button("<", id="button_sent_bckwrd"),
-                                html.Button("play", id="button_play"),
-                                html.Button(">", id="button_sent_fwd"),
-                                html.Button(">>", id="button_div_fwd"),
-                            ],
-                            style={
-                                "display": "flex",
-                                "justify-content": "space-between",
-                                "padding": "10px",
-                                "margin-bottom": "15vh",
-                                "position": "fixed",
-                                "bottom": "0",
-                                "left": "0",
-                            },
-                            id="bottom_controls",
-                        ),
-                    ],
-                    style={
-                        "width": "60%",
-                        "display": "inline-block",
-                        "vertical-align": "top",
-                        "padding": "10px",
-                    },
+                            html.Div(
+                                dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_left),
+                                style={
+                                    "display": "inline-block",
+                                    "vertical-align": "top",
+                                    "padding": "10px",
+                                },
+                                id="pap_content",
+                            ),
+                            html.Div(
+                                # "Controls",
+                                [
+                                    html.Div("0", id="inp_div_id", style={"width": "2rem"}),
+                                    html.Div("0", id="inp_sentence_id", style={"width": "2rem"}),
+                                    html.Button("<<", id="button_div_bckwrd"),
+                                    html.Button("<", id="button_sent_bckwrd"),
+                                    html.Button("play", id="button_play"),
+                                    html.Button(">", id="button_sent_fwd"),
+                                    html.Button(">>", id="button_div_fwd"),
+                                ],
+                                style={
+                                    "display": "flex",
+                                    "justify-content": "space-between",
+                                    "padding": "10px",
+                                    "margin-bottom": "15vh",
+                                    "position": "fixed",
+                                    "bottom": "0",
+                                    "left": "0",
+                                },
+                                id="bottom_controls",
+                            ),
+                        ],
+                        style={
+                            "width": "60%",
+                            "display": "inline-block",
+                            "vertical-align": "top",
+                            "padding": "10px",
+                        },
+                    ),
+                    # Right section (40%)
+                    html.Div(
+                        dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_right),
+                        style={
+                            "width": "40%",
+                            "display": "inline-block",
+                            "vertical-align": "top",
+                            "overflow": "clip",
+                            "padding": "10px",
+                            "word-wrap": "break-word",
+                        },
+                        id="pap_figure",
+                    ),
+                ],
+                style={"height": "85vh"},
+            ),  # Takes 90% of the screen height
+            # Bottom section (10%)
+            html.Div(
+                dcc.Markdown(
+                    html_bottom,
+                    dangerously_allow_html=True,
+                    style={"font-size": "1.1em", "text-align": "center"},
+                    mathjax=True,
                 ),
-                # Right section (40%)
-                html.Div(
-                    dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_right),
-                    style={
-                        "width": "40%",
-                        "display": "inline-block",
-                        "vertical-align": "top",
-                        "overflow": "clip",
-                        "padding": "10px",
-                        "word-wrap": "break-word",
-                    },
-                    id="pap_figure",
-                ),
-            ],
-            style={"height": "85vh"},
-        ),  # Takes 90% of the screen height
-        # Bottom section (10%)
-        html.Div(
-            dcc.Markdown(
-                html_bottom,
-                dangerously_allow_html=True,
-                style={"font-size": "1.1em", "text-align": "center"},
-                mathjax=True,
+                style={"height": "15vh", "padding": "10px", "backgroundColor": "#f8f9fa"},
+                id="pap_sentences",
             ),
-            style={"height": "15vh", "padding": "10px", "backgroundColor": "#f8f9fa"},
-            id="pap_sentences",
-        ),
-        # Polling interval to update the content
-        dcc.Interval(  # A minimal interval to poll for updates
-            id="polling-content-interval", interval=200, n_intervals=0  # Milliseconds (0.1 seconds)
-        ),
-        dcc.Interval(  # A minimal interval to poll for updates
-            id="polling-speech-interval", interval=200, n_intervals=0  # Milliseconds (0.1 seconds)
-        ),
-    ]
-)
-
-
-@app.callback(
-    Input("polling-speech-interval", "n_intervals"),
-)
-def update_speech(_):
-    global current_play_state, div_idx, sentence_idx, current_reading_status, update_flag
-
-    if current_play_state == "PLAY":
-        if current_reading_status == "READY":
-            add_sentence_to_queue((div_ids_list[div_idx], sentence_idx))
-            current_reading_status = "READING"
-            update_flag = True
-        elif current_reading_status == "READ_TEXT":
-            div_idx, sentence_idx = incr_sentence_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict)
-            current_reading_status = "READY"
-            # print("Reading next sentence...")
-
-    return
-
-
-@app.callback(
-    Output("pap_title", "children"),
-    Output("pap_content", "children"),
-    Output("pap_figure", "children"),
-    Output("pap_sentences", "children"),
-    Output("inp_div_id", "children"),
-    Output("inp_sentence_id", "children"),
-    Input("polling-content-interval", "n_intervals"),
-)
-def update_content(_):
-    global update_flag, div_idx, sentence_idx
-
-    # Only proceed if the update_flag is True
-    if not update_flag:
-        raise dash.exceptions.PreventUpdate  # Prevent unnecessary updates
-
-    # Reset the flag
-    update_flag = False
-
-    # Update the content here
-    print("Updating content...", div_idx, sentence_idx)
-
-    # Get the next selected content
-    selected_content = get_selected_content(div_ids_list, div_ids_dict, div_idx, sentence_idx)
-
-    sec_title = selected_content["sec_title"]
-
-    # Update the indices
-    div_idx = selected_content["div_idx"]
-    sentence_idx = selected_content["sentence_idx"]
-
-    # div_id = div_ids_list[div_idx]
-    # add_sentence_to_queue((div_id, sentence_idx))
-
-    html_content = selected_content["html_content"]
-    html_figure = selected_content["html_figure"]
-    html_sentences = selected_content["html_sentences"]
-
-    sentences_update = dcc.Markdown(
-        html_sentences, dangerously_allow_html=True, style={"font-size": "1.1em", "text-align": "center"}, mathjax=True
+            # Polling interval to update the content
+            dcc.Interval(  # A minimal interval to poll for updates
+                id="polling-content-interval", interval=200, n_intervals=0  # Milliseconds (0.1 seconds)
+            ),
+            dcc.Interval(  # A minimal interval to poll for updates
+                id="polling-speech-interval", interval=200, n_intervals=0  # Milliseconds (0.1 seconds)
+            ),
+        ]
     )
 
-    # if not selected_content["overflow"]:
-    #     title_update = dash.no_update
-    #     right_update = dash.no_update
-    #     left_update = dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_content)
-    # else:
-    title_update = html.H2(sec_title)
-    left_update = dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_content)
-    right_update = dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_figure)
 
-    # # Check if the end is reached
-    # if selected_content["end"]:
-    #     print("End of content reached.")
+def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_dict):
+    """Add the callbacks for the buttons."""
 
-    #     raise dash.exceptions.PreventUpdate
+    @app.callback(
+        Output("button_play", "children"),
+        Input("button_play", "n_clicks"),
+    )
+    def toggle_play_pause(n_clicks):
+        if n_clicks is None:
+            raise dash.exceptions.PreventUpdate
 
-    return title_update, left_update, right_update, sentences_update, f"{div_idx}", f"{sentence_idx}"
+        reading_status.update_flag = True
+        next_queue.clear()
 
-    # return html.Div(content)
+        if reading_status.current_play_state == "PAUSED":
+            reading_status.current_play_state = "PLAY"
+            reading_status.current_reading_status = "READY"
+            return "pause"
+        else:
+            reading_status.current_play_state = "PAUSED"
+            return "play"
+
+    @app.callback(
+        Output("inp_div_id", "children", allow_duplicate=True),
+        Output("inp_sentence_id", "children", allow_duplicate=True),
+        Input("button_div_bckwrd", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def update_div_bckwrd(n_clicks_div_bckwrd):
+        if n_clicks_div_bckwrd is None:
+            raise dash.exceptions.PreventUpdate
+
+        reading_status.div_idx, reading_status.sentence_idx = decr_div_idx(
+            reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
+        )
+
+        reading_status.update_flag = True
+        next_queue.clear()
+
+        return f"{reading_status.div_idx}", f"{reading_status.sentence_idx}"
+
+    @app.callback(
+        Output("inp_div_id", "children", allow_duplicate=True),
+        Output("inp_sentence_id", "children", allow_duplicate=True),
+        Input("button_sent_bckwrd", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def update_sent_bckwrd(n_clicks_sent_bckwrd):
+        if n_clicks_sent_bckwrd is None:
+            raise dash.exceptions.PreventUpdate
+
+        reading_status.div_idx, reading_status.sentence_idx = decr_sentence_idx(
+            reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
+        )
+
+        reading_status.update_flag = True
+        next_queue.clear()
+
+        return f"{reading_status.div_idx}", f"{reading_status.sentence_idx}"
+
+    @app.callback(
+        Output("inp_div_id", "children", allow_duplicate=True),
+        Output("inp_sentence_id", "children", allow_duplicate=True),
+        Input("button_sent_fwd", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def update_sent_fwd(n_clicks_sent_fwd):
+        if n_clicks_sent_fwd is None:
+            raise dash.exceptions.PreventUpdate
+
+        reading_status.div_idx, reading_status.sentence_idx = incr_sentence_idx(
+            reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
+        )
+
+        reading_status.update_flag = True
+        next_queue.clear()
+
+        return f"{reading_status.div_idx}", f"{reading_status.sentence_idx}"
+
+    @app.callback(
+        Output("inp_div_id", "children", allow_duplicate=True),
+        Output("inp_sentence_id", "children", allow_duplicate=True),
+        Input("button_div_fwd", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def update_div_fwd(n_clicks_div_fwd):
+        if n_clicks_div_fwd is None:
+            raise dash.exceptions.PreventUpdate
+
+        reading_status.div_idx, reading_status.sentence_idx = incr_div_idx(
+            reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
+        )
+
+        reading_status.update_flag = True
+        next_queue.clear()
+
+        return f"{reading_status.div_idx}", f"{reading_status.sentence_idx}"
 
 
-@app.callback(
-    Output("button_play", "children"),
-    Input("button_play", "n_clicks"),
-)
-def toggle_play_pause(n_clicks):
-    global current_play_state
+def add_speech_polling_callback(app, reading_status, next_queue, div_ids_list, div_ids_dict):
+    """Add the callback for the speech polling."""
 
-    if n_clicks is None:
-        raise dash.exceptions.PreventUpdate
+    def add_sentence_to_queue(idx_tuple):
+        next_queue.append(idx_tuple)
+        print(f"Added sentence to queue: {idx_tuple}")
 
-    print(f"Play/Pause button clicked: {n_clicks}")
+    @app.callback(
+        Input("polling-speech-interval", "n_intervals"),
+    )
+    def update_speech(_):
+        if reading_status.current_play_state == "PLAY":
+            if reading_status.current_reading_status == "READY":
+                add_sentence_to_queue((div_ids_list[reading_status.div_idx], reading_status.sentence_idx))
+                reading_status.current_reading_status = "READING"
+                reading_status.update_flag = True
+            elif reading_status.current_reading_status == "READ_TEXT":
+                reading_status.div_idx, reading_status.sentence_idx = incr_sentence_idx(
+                    reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
+                )
+                reading_status.current_reading_status = "READY"
 
-    if current_play_state == "PAUSED":
-        current_play_state = "PLAY"
-        return "pause"
-    else:
-        current_play_state = "PAUSED"
-        return "play"
-
-
-@app.callback(
-    Output("inp_div_id", "children", allow_duplicate=True),
-    Output("inp_sentence_id", "children", allow_duplicate=True),
-    Input("button_div_bckwrd", "n_clicks"),
-    prevent_initial_call=True,
-)
-def update_div_bckwrd(n_clicks_div_bckwrd):
-    global div_idx, sentence_idx, div_ids_list, div_ids_dict, update_flag, next_queue
-
-    if n_clicks_div_bckwrd is None:
-        raise dash.exceptions.PreventUpdate
-
-    div_idx, sentence_idx = decr_div_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict)
-
-    update_flag = True
-    next_queue.clear()
-
-    return f"{div_idx}", f"{sentence_idx}"
+        return
 
 
-@app.callback(
-    Output("inp_div_id", "children", allow_duplicate=True),
-    Output("inp_sentence_id", "children", allow_duplicate=True),
-    Input("button_sent_bckwrd", "n_clicks"),
-    prevent_initial_call=True,
-)
-def update_sent_bckwrd(n_clicks_sent_bckwrd):
-    global div_idx, sentence_idx, div_ids_list, div_ids_dict, update_flag, next_queue
+def add_html_update_callback(app, div_ids_list, div_ids_dict, reading_status):
+    """Add the callback for the html update."""
 
-    if n_clicks_sent_bckwrd is None:
-        raise dash.exceptions.PreventUpdate
+    @app.callback(
+        Output("pap_title", "children"),
+        Output("pap_content", "children"),
+        Output("pap_figure", "children"),
+        Output("pap_sentences", "children"),
+        Output("inp_div_id", "children"),
+        Output("inp_sentence_id", "children"),
+        Input("polling-content-interval", "n_intervals"),
+    )
+    def update_content(_):
+        if not reading_status.update_flag:
+            raise dash.exceptions.PreventUpdate
 
-    div_idx, sentence_idx = decr_sentence_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict)
+        reading_status.update_flag = False
 
-    update_flag = True
-    next_queue.clear()
+        selected_content = get_selected_content(
+            div_ids_list, div_ids_dict, reading_status.div_idx, reading_status.sentence_idx
+        )
 
-    return f"{div_idx}", f"{sentence_idx}"
+        sec_title = selected_content["sec_title"]
+
+        reading_status.div_idx = selected_content["div_idx"]
+        reading_status.sentence_idx = selected_content["sentence_idx"]
+
+        html_content = selected_content["html_content"]
+        html_figure = selected_content["html_figure"]
+        html_sentences = selected_content["html_sentences"]
+
+        sentences_update = dcc.Markdown(
+            html_sentences,
+            dangerously_allow_html=True,
+            style={"font-size": "1.1em", "text-align": "center"},
+            mathjax=True,
+        )
+
+        title_update = html.H2(sec_title)
+        left_update = dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_content)
+        right_update = dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_figure)
+
+        return (
+            title_update,
+            left_update,
+            right_update,
+            sentences_update,
+            f"{reading_status.div_idx}",
+            f"{reading_status.sentence_idx}",
+        )
 
 
-@app.callback(
-    Output("inp_div_id", "children", allow_duplicate=True),
-    Output("inp_sentence_id", "children", allow_duplicate=True),
-    Input("button_sent_fwd", "n_clicks"),
-    prevent_initial_call=True,
-)
-def update_sent_fwd(n_clicks_sent_fwd):
-    global div_idx, sentence_idx, div_ids_list, div_ids_dict, update_flag, next_queue
+def init_app():
 
-    if n_clicks_sent_fwd is None:
-        raise dash.exceptions.PreventUpdate
+    print("1")
 
-    div_idx, sentence_idx = incr_sentence_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict)
+    # Initialize the app
+    app = dash.Dash(
+        __name__,
+        external_stylesheets=[
+            dbc.themes.BOOTSTRAP,
+            "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css",
+            "https://arxiv.org/static/browse/0.3.4/css/ar5iv.0.7.9.min.css",
+            "https://arxiv.org/static/browse/0.3.4/css/ar5iv-fonts.0.7.9.min.css",
+            "https://arxiv.org/static/browse/0.3.4/css/latexml_styles.css",
+        ],
+    )
 
-    update_flag = True
-    next_queue.clear()
+    # Get tts model
+    tts = get_tts_model()
 
-    return f"{div_idx}", f"{sentence_idx}"
+    # Set the logging level
+    # logging.getLogger("werkzeug").setLevel(logging.WARN)
 
+    # Initialize the reading status and the sentence queue
+    reading_status = ReadingStatus()
 
-@app.callback(
-    Output("inp_div_id", "children", allow_duplicate=True),
-    Output("inp_sentence_id", "children", allow_duplicate=True),
-    Input("button_div_fwd", "n_clicks"),
-    prevent_initial_call=True,
-)
-def update_div_fwd(n_clicks_div_fwd):
-    global div_idx, sentence_idx, div_ids_list, div_ids_dict, update_flag, next_queue
+    next_queue = deque()
+    wav_dict = {}
 
-    if n_clicks_div_fwd is None:
-        raise dash.exceptions.PreventUpdate
+    # Shared trigger variable for the callback
 
-    div_idx, sentence_idx = incr_div_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict)
+    print("2")
 
-    update_flag = True
-    next_queue.clear()
+    div_ids_list, div_ids_dict = get_html()
 
-    return f"{div_idx}", f"{sentence_idx}"
+    div_id = div_ids_list[reading_status.div_idx]
+
+    html_left = div_ids_dict[div_id]["html"]
+    html_right = div_ids_dict[div_id]["figure"]
+
+    sentences = div_ids_dict[div_id]["sentences"]
+    html_bottom = f"<b>{sentences[0]}</b>\n<br>{sentences[1]}\n<br>{sentences[2]}\n"
+
+    sec_title = div_ids_dict[div_id]["title"]
+
+    set_app_layout(app, sec_title, html_left, html_right, html_bottom)
+
+    print("3")
+
+    # Start the background thread
+    tts_thread = threading.Thread(
+        target=thread_turn_sentence_to_audio,
+        args=(tts, wav_dict, div_ids_list, div_ids_dict, reading_status),
+        daemon=True,
+    )
+    tts_thread.start()
+
+    print("4")
+
+    # Start the background thread
+    trigger_thread = threading.Thread(
+        target=async_highlight_trigger, args=(wav_dict, next_queue, reading_status), daemon=True
+    )
+    trigger_thread.start()
+
+    add_speech_polling_callback(app, reading_status, next_queue, div_ids_list, div_ids_dict)
+    add_html_update_callback(app, div_ids_list, div_ids_dict, reading_status)
+    add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_dict)
+
+    return app
 
 
 if __name__ == "__main__":
+
+    app = init_app()
+
     app.run_server(debug=False)
