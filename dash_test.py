@@ -44,6 +44,14 @@ def incr_sentence_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict):
         new_sentence_idx = 0
         new_div_idx += 1
 
+    if new_div_idx >= len(div_ids_list):
+        return div_idx, new_sentence_idx
+
+    while len(div_ids_dict[div_ids_list[new_div_idx]]["sentences"]) == 0:
+        new_div_idx += 1
+        if new_div_idx >= len(div_ids_list):
+            break
+
     if div_idx >= len(div_ids_list):
         new_div_idx = div_idx
 
@@ -204,20 +212,24 @@ def thread_turn_sentence_to_audio(tts, wav_dict, div_ids_list, div_ids_dict, rea
                 break
             next_div_id = div_ids_list[next_div_idx]
 
-        sentence = div_ids_dict[next_div_id]["sentences_spoken"][next_sentence_idx]
+        try:
+            sentence = div_ids_dict[next_div_id]["sentences_spoken"][next_sentence_idx]
 
-        print(f"Processing sentence: {sentence}")
-        # time.sleep(1 + random.random() * 2)
+            print(f"Processing sentence: {sentence}")
+            # time.sleep(1 + random.random() * 2)
 
-        # wav = tts.tts(text="Hello world!", speaker_wav="my/cloning/audio.wav", language="en")
-        wav = tts.tts(
-            text=sentence,
-            # language="en",
-            split_sentences=True,
-            # speaker="p229",
-        )
+            # wav = tts.tts(text="Hello world!", speaker_wav="my/cloning/audio.wav", language="en")
+            wav = tts.tts(
+                text=sentence,
+                # language="en",
+                split_sentences=True,
+                # speaker="p229",
+            )
 
-        wav_dict[(next_div_id, next_sentence_idx)] = wav
+            wav_dict[(next_div_id, next_sentence_idx)] = wav
+
+        except Exception:
+            pass
 
 
 def async_highlight_trigger(wav_dict, next_queue, reading_status):
@@ -296,6 +308,8 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom):
                             "display": "inline-block",
                             "vertical-align": "top",
                             "padding": "10px",
+                            "height": "85vh",
+                            "overflow": "scroll",
                         },
                     ),
                     # Right section (40%)
@@ -305,9 +319,11 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom):
                             "width": "40%",
                             "display": "inline-block",
                             "vertical-align": "top",
-                            "overflow": "clip",
+                            # "overflow": "clip",
                             "padding": "10px",
                             "word-wrap": "break-word",
+                            "height": "85vh",
+                            "overflow": "scroll",
                         },
                         id="pap_figure",
                     ),
@@ -319,7 +335,7 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom):
                 dcc.Markdown(
                     html_bottom,
                     dangerously_allow_html=True,
-                    style={"font-size": "1.1em", "text-align": "center"},
+                    style={"font-size": "1.1em", "text-align": "center", "z-index": "1000"},
                     mathjax=True,
                 ),
                 style={"height": "15vh", "padding": "10px", "backgroundColor": "#f8f9fa"},
@@ -512,7 +528,7 @@ def add_html_update_callback(app, div_ids_list, div_ids_dict, reading_status):
         )
 
 
-def init_app():
+def init_app(url):
 
     print("1")
 
@@ -532,7 +548,7 @@ def init_app():
     tts = get_tts_model()
 
     # Set the logging level
-    # logging.getLogger("werkzeug").setLevel(logging.WARN)
+    logging.getLogger("werkzeug").setLevel(logging.WARN)
 
     # Initialize the reading status and the sentence queue
     reading_status = ReadingStatus()
@@ -544,7 +560,7 @@ def init_app():
 
     print("2")
 
-    div_ids_list, div_ids_dict = get_html()
+    div_ids_list, div_ids_dict = get_html(url=url)
 
     div_id = div_ids_list[reading_status.div_idx]
 
@@ -585,6 +601,9 @@ def init_app():
 
 if __name__ == "__main__":
 
-    app = init_app()
+    # url = "https://arxiv.org/html/2412.06787v2"
+    url = "https://arxiv.org/html/2412.13663v2"
+
+    app = init_app(url)
 
     app.run_server(debug=False)

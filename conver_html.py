@@ -161,9 +161,8 @@ def mark_words_in_html(html: str, words: list, start_index: int) -> tuple:
     return html, last_position_in_original
 
 
-def get_html():
+def get_html(url):
 
-    url = "https://arxiv.org/html/2412.06787v2"
     response = requests.get(url)
 
     if response.status_code == 200:
@@ -259,6 +258,13 @@ def get_html():
         div_html = div_info["html"]
         div_soup = BeautifulSoup(div_html, "html.parser")
         div_html_str = str(div_soup)
+
+        # get the html code up to this div in the article
+        prev_html = str(article_tag)[: str(article_tag).find(str(div_info["div_obj"]))]
+        after_html = str(article_tag)[str(article_tag).find(str(div_info["div_obj"])) :]
+
+        div_ids_dict[div_id]["prev_html"] = prev_html
+        div_ids_dict[div_id]["after_html"] = after_html
 
         # Replace all math parts with their spoken text versions
         for math_tag in div_soup.find_all("math"):
