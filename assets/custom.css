@@ -1,0 +1,7 @@
+body::after {
+  content: "" !important;
+  display: block;
+  color: none !important;
+  background: none !important;
+  font-size: 20px;
+}

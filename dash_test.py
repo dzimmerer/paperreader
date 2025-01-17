@@ -10,7 +10,7 @@ import dash
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 import dash_dangerously_set_inner_html
-from dash.dependencies import Input, Output
+from dash.dependencies import Input, Output, State
 
 from conver_html import get_html
 from collections import deque
@@ -125,6 +125,9 @@ def get_next_selected_content(div_ids_list, div_ids_dict, div_idx, sentence_idx)
     html_content = div_ids_dict[div_id]["highlighted_html"][sentence_idx]
     html_figure = div_ids_dict[div_id]["figure"]
 
+    prev_html = div_ids_dict[div_id]["prev_html"]
+    next_html = div_ids_dict[div_id]["next_html"]
+
     if len(sentences) < 3:
         sentences = sentences + [""] * (3 - len(sentences))
 
@@ -148,6 +151,8 @@ def get_next_selected_content(div_ids_list, div_ids_dict, div_idx, sentence_idx)
         "sentence_idx": sentence_idx,
         "overflow": overflow,
         "end": end,
+        "prev_html": prev_html,
+        "next_html": next_html,
     }
 
 
@@ -164,6 +169,9 @@ def get_selected_content(div_ids_list, div_ids_dict, div_idx, sentence_idx):
     # html_content = div_ids_dict[div_id]["html"]
     html_content = div_ids_dict[div_id]["highlighted_html"][sentence_idx]
     html_figure = div_ids_dict[div_id]["figure"]
+
+    prev_html = div_ids_dict[div_id]["prev_html"]
+    next_html = div_ids_dict[div_id]["next_html"]
 
     if len(sentences) < 3:
         sentences = sentences + [""] * (3 - len(sentences))
@@ -186,6 +194,8 @@ def get_selected_content(div_ids_list, div_ids_dict, div_idx, sentence_idx):
         "sec_title": sec_title,
         "div_idx": div_idx,
         "sentence_idx": sentence_idx,
+        "prev_html": prev_html,
+        "next_html": next_html,
     }
 
 
@@ -199,6 +209,10 @@ def thread_turn_sentence_to_audio(tts, wav_dict, div_ids_list, div_ids_dict, rea
         print(f"Next div_idx: {next_div_idx}, Next sentence_idx: {next_sentence_idx}")
 
         next_div_id = div_ids_list[next_div_idx]
+
+        if next_div_id == "#end":
+            time.sleep(1)
+            continue
 
         # div_id = s_queue_dict["div_id"]
         # sentence = s_queue_dict["sentence"]
@@ -256,7 +270,7 @@ def async_highlight_trigger(wav_dict, next_queue, reading_status):
             time.sleep(0.5)
 
 
-def set_app_layout(app, sec_title, html_left, html_right, html_bottom):
+def set_app_layout(app, sec_title, html_left, html_right, html_bottom, prev_html, next_html):
     app.layout = html.Div(
         [
             # Top section: split into two parts (60% left, 40% right)
@@ -270,15 +284,34 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom):
                                     sec_title,
                                 ),
                                 id="pap_title",
+                                style={"padding": "10px", "height": "10vh", "overflow": "hidden"},
                             ),
                             html.Div(
-                                dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_left),
+                                [
+                                    html.Div(
+                                        dash_dangerously_set_inner_html.DangerouslySetInnerHTML(prev_html),
+                                        id="prev_content",
+                                        style={"display": "inline-block", "width": "55vw"},
+                                    ),
+                                    html.Div("", id="scroll_here"),
+                                    html.Div(
+                                        dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_left),
+                                        id="pap_content",
+                                        style={"display": "inline-block", "width": "55vw"},
+                                    ),
+                                    html.Div(
+                                        dash_dangerously_set_inner_html.DangerouslySetInnerHTML(next_html),
+                                        id="next_content",
+                                        style={"display": "inline-block", "width": "55vw"},
+                                    ),
+                                ],
                                 style={
                                     "display": "inline-block",
                                     "vertical-align": "top",
                                     "padding": "10px",
+                                    "height": "75vh",
+                                    "overflow": "scroll",
                                 },
-                                id="pap_content",
                             ),
                             html.Div(
                                 # "Controls",
@@ -290,6 +323,7 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom):
                                     html.Button("play", id="button_play"),
                                     html.Button(">", id="button_sent_fwd"),
                                     html.Button(">>", id="button_div_fwd"),
+                                    html.Button("🔓", id="button_scroll", style={"margin-left": "1rem"}),
                                 ],
                                 style={
                                     "display": "flex",
@@ -299,24 +333,26 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom):
                                     "position": "fixed",
                                     "bottom": "0",
                                     "left": "0",
+                                    "background-color": "white",
+                                    "z-index": "3000",
                                 },
                                 id="bottom_controls",
                             ),
                         ],
                         style={
-                            "width": "60%",
+                            "width": "59vw",
                             "display": "inline-block",
                             "vertical-align": "top",
                             "padding": "10px",
                             "height": "85vh",
-                            "overflow": "scroll",
+                            "overflow": "wrap",
                         },
                     ),
                     # Right section (40%)
                     html.Div(
                         dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_right),
                         style={
-                            "width": "40%",
+                            "width": "39vw",
                             "display": "inline-block",
                             "vertical-align": "top",
                             # "overflow": "clip",
@@ -335,10 +371,10 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom):
                 dcc.Markdown(
                     html_bottom,
                     dangerously_allow_html=True,
-                    style={"font-size": "1.1em", "text-align": "center", "z-index": "1000"},
+                    style={"font-size": "1.1em", "text-align": "center", "z-index": "2001"},
                     mathjax=True,
                 ),
-                style={"height": "15vh", "padding": "10px", "backgroundColor": "#f8f9fa"},
+                style={"height": "15vh", "padding": "10px", "backgroundColor": "#f8f9fa", "z-index": "2000"},
                 id="pap_sentences",
             ),
             # Polling interval to update the content
@@ -348,6 +384,9 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom):
             dcc.Interval(  # A minimal interval to poll for updates
                 id="polling-speech-interval", interval=200, n_intervals=0  # Milliseconds (0.1 seconds)
             ),
+            dcc.Store(
+                id="scroll-enabled-store", storage_type="local", data=False
+            ),  # Store scroll state in localStorage
         ]
     )
 
@@ -357,6 +396,7 @@ def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_
 
     @app.callback(
         Output("button_play", "children"),
+        Output("scroll-enabled-store", "data"),
         Input("button_play", "n_clicks"),
     )
     def toggle_play_pause(n_clicks):
@@ -369,10 +409,11 @@ def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_
         if reading_status.current_play_state == "PAUSED":
             reading_status.current_play_state = "PLAY"
             reading_status.current_reading_status = "READY"
-            return "pause"
+            return "pause", True
         else:
+            sd.stop()
             reading_status.current_play_state = "PAUSED"
-            return "play"
+            return "play", False
 
     @app.callback(
         Output("inp_div_id", "children", allow_duplicate=True),
@@ -383,6 +424,8 @@ def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_
     def update_div_bckwrd(n_clicks_div_bckwrd):
         if n_clicks_div_bckwrd is None:
             raise dash.exceptions.PreventUpdate
+
+        sd.stop()
 
         reading_status.div_idx, reading_status.sentence_idx = decr_div_idx(
             reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
@@ -403,6 +446,8 @@ def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_
         if n_clicks_sent_bckwrd is None:
             raise dash.exceptions.PreventUpdate
 
+        sd.stop()
+
         reading_status.div_idx, reading_status.sentence_idx = decr_sentence_idx(
             reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
         )
@@ -421,6 +466,8 @@ def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_
     def update_sent_fwd(n_clicks_sent_fwd):
         if n_clicks_sent_fwd is None:
             raise dash.exceptions.PreventUpdate
+
+        sd.stop()
 
         reading_status.div_idx, reading_status.sentence_idx = incr_sentence_idx(
             reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
@@ -441,6 +488,8 @@ def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_
         if n_clicks_div_fwd is None:
             raise dash.exceptions.PreventUpdate
 
+        sd.stop()
+
         reading_status.div_idx, reading_status.sentence_idx = incr_div_idx(
             reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
         )
@@ -450,11 +499,25 @@ def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_
 
         return f"{reading_status.div_idx}", f"{reading_status.sentence_idx}"
 
+    @app.callback(
+        Output("scroll-enabled-store", "data", allow_duplicate=True),
+        Input("button_scroll", "n_clicks"),
+        State("scroll-enabled-store", "data"),
+        prevent_initial_call=True,
+    )
+    def toggle_scroll(n_clicks, scroll_enabled):
+        if n_clicks is None:
+            raise dash.exceptions.PreventUpdate
+
+        return not scroll_enabled
+
 
 def add_speech_polling_callback(app, reading_status, next_queue, div_ids_list, div_ids_dict):
     """Add the callback for the speech polling."""
 
     def add_sentence_to_queue(idx_tuple):
+        if idx_tuple[0] == "#end":
+            return
         next_queue.append(idx_tuple)
         print(f"Added sentence to queue: {idx_tuple}")
 
@@ -464,6 +527,8 @@ def add_speech_polling_callback(app, reading_status, next_queue, div_ids_list, d
     def update_speech(_):
         if reading_status.current_play_state == "PLAY":
             if reading_status.current_reading_status == "READY":
+                if div_ids_list[reading_status.div_idx] == "#end":
+                    return
                 add_sentence_to_queue((div_ids_list[reading_status.div_idx], reading_status.sentence_idx))
                 reading_status.current_reading_status = "READING"
                 reading_status.update_flag = True
@@ -486,6 +551,8 @@ def add_html_update_callback(app, div_ids_list, div_ids_dict, reading_status):
         Output("pap_sentences", "children"),
         Output("inp_div_id", "children"),
         Output("inp_sentence_id", "children"),
+        Output("prev_content", "children"),
+        Output("next_content", "children"),
         Input("polling-content-interval", "n_intervals"),
     )
     def update_content(_):
@@ -493,6 +560,25 @@ def add_html_update_callback(app, div_ids_list, div_ids_dict, reading_status):
             raise dash.exceptions.PreventUpdate
 
         reading_status.update_flag = False
+
+        if div_ids_list[reading_status.div_idx] == "#end":
+            return (
+                html.H2(
+                    "The end",
+                ),
+                dash.no_update,
+                dash.no_update,
+                dcc.Markdown(
+                    "The end",
+                    dangerously_allow_html=True,
+                    style={"font-size": "1.1em", "text-align": "center"},
+                    mathjax=True,
+                ),
+                dash.no_update,
+                dash.no_update,
+                dash.no_update,
+                dash.no_update,
+            )
 
         selected_content = get_selected_content(
             div_ids_list, div_ids_dict, reading_status.div_idx, reading_status.sentence_idx
@@ -518,6 +604,12 @@ def add_html_update_callback(app, div_ids_list, div_ids_dict, reading_status):
         left_update = dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_content)
         right_update = dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_figure)
 
+        prev_html = selected_content["prev_html"]
+        next_html = selected_content["next_html"]
+
+        prev_update = dash_dangerously_set_inner_html.DangerouslySetInnerHTML(prev_html)
+        next_update = dash_dangerously_set_inner_html.DangerouslySetInnerHTML(next_html)
+
         return (
             title_update,
             left_update,
@@ -525,6 +617,8 @@ def add_html_update_callback(app, div_ids_list, div_ids_dict, reading_status):
             sentences_update,
             f"{reading_status.div_idx}",
             f"{reading_status.sentence_idx}",
+            prev_update,
+            next_update,
         )
 
 
@@ -562,6 +656,8 @@ def init_app(url):
 
     div_ids_list, div_ids_dict = get_html(url=url)
 
+    print("2.10")
+
     div_id = div_ids_list[reading_status.div_idx]
 
     html_left = div_ids_dict[div_id]["html"]
@@ -572,7 +668,10 @@ def init_app(url):
 
     sec_title = div_ids_dict[div_id]["title"]
 
-    set_app_layout(app, sec_title, html_left, html_right, html_bottom)
+    prev_html = div_ids_dict[div_id]["prev_html"]
+    next_html = div_ids_dict[div_id]["next_html"]
+
+    set_app_layout(app, sec_title, html_left, html_right, html_bottom, prev_html, next_html)
 
     print("3")
 
@@ -602,7 +701,7 @@ def init_app(url):
 if __name__ == "__main__":
 
     # url = "https://arxiv.org/html/2412.06787v2"
-    url = "https://arxiv.org/html/2412.13663v2"
+    url = "https://arxiv.org/html/2410.10812v1"
 
     app = init_app(url)
 

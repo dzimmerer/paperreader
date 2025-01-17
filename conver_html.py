@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup, NavigableString
 from markdownify import markdownify as md
 import markdown
+from tqdm import tqdm
 
 from mathtex2text import latex_to_speech_with_latexwalker
 
@@ -192,8 +193,11 @@ def get_html(url):
         if src and not src.startswith("http"):
             img_tag["src"] = f"{url}/{src}"
 
-    # Extract all <div> elements with class "ltx_para" and their IDs
-    divs_with_ltx_para = soup.find_all("div", class_="ltx_para")
+    # # Extract all <div> elements with class "ltx_para" and their IDs
+    # divs_with_ltx_para = soup.find_all("div", class_="ltx_para")
+
+    # Extract all <div> elements with class "ltx_para" or ltx_figure and their IDs
+    divs_with_ltx_para = soup.find_all(["div", "figure"], class_=["ltx_para", "ltx_figure", "ltx_table"])
 
     div_ids_list = [div["id"] for div in divs_with_ltx_para if "id" in div.attrs]
 
@@ -205,6 +209,7 @@ def get_html(url):
             "id": div["id"],
             "html": str(div),
             "div_obj": div,
+            "type": "figure" if div.name == "figure" else "text",
             "title": (
                 div.parent.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "h7"], class_="ltx_title")[0]
                 .get_text()
@@ -219,6 +224,7 @@ def get_html(url):
 
     div_ids_dict["ltx_abstract"] = {
         "id": "ltx_abstract",
+        "type": "abstract",
         "html": str(soup.find("div", class_="ltx_abstract")),
         "div_obj": soup.find("div", class_="ltx_abstract"),
         "title": soup.find(["h1", "h2", "h3", "h4", "h5", "h6", "h7"], class_="ltx_title").get_text().strip()[:150]
@@ -228,8 +234,16 @@ def get_html(url):
     # Find the closest figure for each div
     prev_figure_tag = None
     for div_id, div_info in div_ids_dict.items():
+        if div_info["type"] == "figure":
+            div_info["figure"] = str(div_info["div_obj"])
+            div_info["figure_id"] = div_info["div_obj"].get("id", "")
+            prev_figure_tag = div_info["div_obj"]
+            continue
         div_obj = div_info["div_obj"]
         figure_tag = div_obj.find_next("figure", class_="ltx_figure")
+        while figure_tag and not figure_tag.find("img"):
+            figure_tag = figure_tag.find_next("figure", class_="ltx_figure")
+
         if figure_tag:
             div_info["figure_id"] = figure_tag.get("id", "")
             div_info["figure"] = str(figure_tag)
@@ -240,12 +254,14 @@ def get_html(url):
 
     # Check if in the div html is <a class="ltx_ref" href="https://arxiv.org/html/2412.06787v2#FIG_ID">
     for div_id, div_info in div_ids_dict.items():
+        if div_info["type"] == "figure":
+            continue
         div_obj = div_info["div_obj"]
         ltx_ref_links = div_obj.find_all("a", class_="ltx_ref")
         for link in ltx_ref_links:
             href = link.get("href", "")
             match = href.split("#")[-1]
-            if match and match.startswith("S"):
+            if match and match.startswith("S") and ("F" in match or "T" in match):
                 fig_id = match
                 # Find the figure with the extracted fig_id
                 figure_tag = soup.find(id=fig_id)
@@ -254,17 +270,27 @@ def get_html(url):
                     div_info["figure_id"] = fig_id
                     div_info["figure"] = str(figure_tag)
 
-    for div_id, div_info in div_ids_dict.items():
+    # Remove all tags with class ltx_note_outer from article
+    for note_tag in article_tag.find_all(class_="ltx_note_outer"):
+        note_tag.replace_with("")
+
+    remove_list = []
+
+    for div_id, div_info in tqdm(div_ids_dict.items(), desc="Processing divs"):
         div_html = div_info["html"]
         div_soup = BeautifulSoup(div_html, "html.parser")
         div_html_str = str(div_soup)
 
         # get the html code up to this div in the article
         prev_html = str(article_tag)[: str(article_tag).find(str(div_info["div_obj"]))]
-        after_html = str(article_tag)[str(article_tag).find(str(div_info["div_obj"])) :]
+        next_html = str(article_tag)[str(article_tag).find(str(div_info["div_obj"])) + len(str(div_info["div_obj"])) :]
 
         div_ids_dict[div_id]["prev_html"] = prev_html
-        div_ids_dict[div_id]["after_html"] = after_html
+        div_ids_dict[div_id]["next_html"] = next_html
+
+        # Replace/ Remove all tables
+        for table_tag in div_soup.find_all("table"):
+            table_tag.replace_with("")
 
         # Replace all math parts with their spoken text versions
         for math_tag in div_soup.find_all("math"):
@@ -283,6 +309,11 @@ def get_html(url):
         # Convert the modified HTML to text
         cleaned_text = div_soup.get_text(separator=" ", strip=True)
         div_ids_dict[div_id]["cleaned_text"] = cleaned_text
+
+        if cleaned_text == "":
+            div_ids_list.remove(div_id)
+            remove_list.append(div_id)
+            continue
 
         # Split the cleaned text into sentences
         div_ids_dict[div_id]["sentences"] = split_text(cleaned_text)
@@ -310,6 +341,20 @@ def get_html(url):
             # print(div_id, start_highlight_index)
 
         div_ids_dict[div_id]["highlighted_html"] = highlighted_divs
+
+    for div_id in remove_list:
+        del div_ids_dict[div_id]
+
+    # Add end to div_ids_list and div_ids_dict
+    div_ids_list.append("#end")
+    div_ids_dict["#end"] = {
+        "id": "#end",
+        "html": "",
+        "div_obj": None,
+        "type": "end",
+        "title": "End",
+        "sentences": ["The end"],
+    }
 
     # enhanced_article_html = process_element(soup, article_tag)
     # Step 6: Get the modified HTML content of the "article" tag
