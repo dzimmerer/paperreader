@@ -53,7 +53,7 @@ def process_latex_node(node):
             return ""  # Skip the \left or \right macros
 
         # Ignore math fonts like \mathcal, \mathbb, \mathbf, etc.
-        if node.macroname in ["mathcal", "mathbb", "mathbf", "mathsf", "mathit"]:
+        if node.macroname in ["mathcal", "mathbb", "mathbf", "mathsf", "mathit", "text", "mathrm", "mathscr"]:
             # Just process the content inside these macros
             return " ".join(process_latex_node(n) for n in node.nodeargd.argnlist).strip()
 
@@ -61,7 +61,7 @@ def process_latex_node(node):
         if node.macroname == "frac":
             numerator = process_latex_node(node.nodeargd.argnlist[0])  # First argument of \frac
             denominator = process_latex_node(node.nodeargd.argnlist[1])  # Second argument of \frac
-            return f"fraction {numerator} over {denominator}"
+            return f"fraction of {numerator} over {denominator}"
         elif node.macroname == "sqrt":
             content = " ".join(process_latex_node(n) for n in node.nodeargd.argnlist).strip()  # Argument of \sqrt
             return f"square root of {content}"
@@ -120,7 +120,16 @@ def process_latex_node(node):
             )  # | ... |
         elif node.macroname == "lVert" or node.macroname == "rVert":
             return "norm of " + " ".join(process_latex_node(n) for n in node.nodeargd.argnlist).strip()  # || ... ||
-
+        elif node.macroname == "ldots" or node.macroname == "cdots" or node.macroname == "vdots":
+            return "dot dot dot"
+        elif node.macroname == "infty":
+            return "infinity"
+        elif node.macroname == "forall":
+            return "for all"
+        elif node.macroname == "exists":
+            return "there exists"
+        elif node.macroname.startswith("var"):
+            return node.macroname[3:]  # Remove "var" prefix
         else:
             return node.macroname  # Fallback for unhandled macros
     elif isinstance(node, LatexGroupNode):
@@ -160,7 +169,8 @@ def parse_superscripts_and_subscripts(latex_string):
                 # Read single character superscript
                 spoken += latex_string[i]
         elif latex_string[i] == "_":
-            spoken += " sub "
+            # spoken += " sub "
+            spoken += "  "
             i += 1
             if i < len(latex_string) and latex_string[i] == "{":
                 # Read grouped subscript

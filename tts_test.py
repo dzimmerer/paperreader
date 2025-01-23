@@ -23,16 +23,16 @@ wav = tts.tts(
     # speaker="p225",
 )
 
-sd.play(wav, blocking=True, samplerate=44100)
+sd.play(wav, blocking=True, samplerate=44100 * 1.2)
 # sd.play(wav, blocking=True, samplerate=22050)
 
 
-# generate speech by cloning a voice using default settings
-tts.tts_to_file(
-    text="It took me quite a long time to develop a voice, and now that I have it I'm not going to be silent.",
-    file_path="output.wav",
-    # language="en",
-    split_sentences=True,
-)
+# # generate speech by cloning a voice using default settings
+# tts.tts_to_file(
+#     text="It took me quite a long time to develop a voice, and now that I have it I'm not going to be silent.",
+#     file_path="output.wav",
+#     # language="en",
+#     split_sentences=True,
+# )
 
 print("Speech generated successfully")

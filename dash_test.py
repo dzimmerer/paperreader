@@ -3,6 +3,7 @@ import random
 import time
 
 from TTS.api import TTS
+import librosa
 import sounddevice as sd
 
 
@@ -17,6 +18,11 @@ from collections import deque
 
 import logging
 
+from kokoro.interface import KokoroInterface
+
+
+SAMPLE_RATE = 44100
+
 
 class ReadingStatus:
     def __init__(self):
@@ -25,10 +31,12 @@ class ReadingStatus:
         self.current_reading_status = "READY"
         self.current_play_state = "PAUSED"
         self.update_flag = False
+        self.speed = 1
 
 
 def get_tts_model():
-    tts = TTS("tts_models/en/jenny/jenny")
+    # tts = TTS("tts_models/en/jenny/jenny")
+    tts = KokoroInterface()
 
     return tts
 
@@ -173,6 +181,10 @@ def get_selected_content(div_ids_list, div_ids_dict, div_idx, sentence_idx):
     prev_html = div_ids_dict[div_id]["prev_html"]
     next_html = div_ids_dict[div_id]["next_html"]
 
+    is_title = False
+    if sentence_idx == 0 and sentences[sentence_idx].strip() == div_ids_dict[div_id]["title"].strip():
+        is_title = True
+
     if len(sentences) < 3:
         sentences = sentences + [""] * (3 - len(sentences))
 
@@ -196,6 +208,7 @@ def get_selected_content(div_ids_list, div_ids_dict, div_idx, sentence_idx):
         "sentence_idx": sentence_idx,
         "prev_html": prev_html,
         "next_html": next_html,
+        "is_title": is_title,
     }
 
 
@@ -227,22 +240,36 @@ def thread_turn_sentence_to_audio(tts, wav_dict, div_ids_list, div_ids_dict, rea
             next_div_id = div_ids_list[next_div_idx]
 
         try:
-            sentence = div_ids_dict[next_div_id]["sentences_spoken"][next_sentence_idx]
 
-            print(f"Processing sentence: {sentence}")
+            if next_div_id == "#end":
+                time.sleep(1)
+                continue
+
+            sentence = div_ids_dict[next_div_id]["sentences_spoken"][next_sentence_idx]
+            real_sentence = div_ids_dict[next_div_id]["sentences"][next_sentence_idx]
+
+            # check if there are 2 $ signs in the sentence
+            read_speed = reading_status.speed
+            if real_sentence.count("$") > 1:
+                read_speed = reading_status.speed * 0.8
+
+            print(f"Processing sentence: {real_sentence}")
             # time.sleep(1 + random.random() * 2)
 
-            # wav = tts.tts(text="Hello world!", speaker_wav="my/cloning/audio.wav", language="en")
-            wav = tts.tts(
-                text=sentence,
-                # language="en",
-                split_sentences=True,
-                # speaker="p229",
-            )
+            # wav = tts.tts(
+            #     text=sentence,
+            #     # language="en",
+            #     split_sentences=True,
+            #     # speaker="p229",
+            # )
+            wav = tts.generate_audio(sentence, speed=read_speed)
 
-            wav_dict[(next_div_id, next_sentence_idx)] = wav
+            wav_resampled = librosa.resample(wav, orig_sr=24000, target_sr=SAMPLE_RATE)
+
+            wav_dict[(next_div_id, next_sentence_idx)] = wav_resampled[12000:-12000]
 
         except Exception:
+            print("Error processing sentence", sentence)
             pass
 
 
@@ -259,7 +286,10 @@ def async_highlight_trigger(wav_dict, next_queue, reading_status):
 
         if next_keys:
             if next_keys in wav_dict:
-                sd.play(wav_dict[next_keys], blocking=True, samplerate=44000)
+                try:
+                    sd.play(wav_dict[next_keys], blocking=True, samplerate=SAMPLE_RATE, latency="low")
+                except Exception:
+                    print("Error playing audio")
                 reading_status.update_flag = True
                 reading_status.current_reading_status = "READ_TEXT"
                 del wav_dict[next_keys]
@@ -382,7 +412,7 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom, prev_html
                 id="polling-content-interval", interval=200, n_intervals=0  # Milliseconds (0.1 seconds)
             ),
             dcc.Interval(  # A minimal interval to poll for updates
-                id="polling-speech-interval", interval=200, n_intervals=0  # Milliseconds (0.1 seconds)
+                id="polling-speech-interval", interval=50, n_intervals=0  # Milliseconds (0.1 seconds)
             ),
             dcc.Store(
                 id="scroll-enabled-store", storage_type="local", data=False
@@ -511,6 +541,17 @@ def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_
 
         return not scroll_enabled
 
+    @app.callback(
+        Output("button_scroll", "children"),
+        Input("scroll-enabled-store", "data"),
+        prevent_initial_call=True,
+    )
+    def update_scroll_button(scroll_enabled):
+        if scroll_enabled:
+            return "🔒"
+        else:
+            return "🔓"
+
 
 def add_speech_polling_callback(app, reading_status, next_queue, div_ids_list, div_ids_dict):
     """Add the callback for the speech polling."""
@@ -526,17 +567,22 @@ def add_speech_polling_callback(app, reading_status, next_queue, div_ids_list, d
     )
     def update_speech(_):
         if reading_status.current_play_state == "PLAY":
+            if reading_status.current_reading_status == "READ_TEXT":
+                reading_status.div_idx, reading_status.sentence_idx = incr_sentence_idx(
+                    reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
+                )
+                reading_status.current_reading_status = "READY"
             if reading_status.current_reading_status == "READY":
                 if div_ids_list[reading_status.div_idx] == "#end":
                     return
                 add_sentence_to_queue((div_ids_list[reading_status.div_idx], reading_status.sentence_idx))
                 reading_status.current_reading_status = "READING"
                 reading_status.update_flag = True
-            elif reading_status.current_reading_status == "READ_TEXT":
-                reading_status.div_idx, reading_status.sentence_idx = incr_sentence_idx(
-                    reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
-                )
-                reading_status.current_reading_status = "READY"
+            # elif reading_status.current_reading_status == "READ_TEXT":
+            #     reading_status.div_idx, reading_status.sentence_idx = incr_sentence_idx(
+            #         reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
+            #     )
+            #     reading_status.current_reading_status = "READY"
 
         return
 
@@ -600,7 +646,10 @@ def add_html_update_callback(app, div_ids_list, div_ids_dict, reading_status):
             mathjax=True,
         )
 
-        title_update = html.H2(sec_title)
+        if selected_content["is_title"]:
+            title_update = html.H4(sec_title, style={"background-color": "yellow"})
+        else:
+            title_update = html.H4(sec_title)
         left_update = dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_content)
         right_update = dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_figure)
 
@@ -701,7 +750,8 @@ def init_app(url):
 if __name__ == "__main__":
 
     # url = "https://arxiv.org/html/2412.06787v2"
-    url = "https://arxiv.org/html/2410.10812v1"
+    # url = "https://arxiv.org/html/2404.02905v2"
+    url = "https://arxiv.org/html/2501.12948v1"
 
     app = init_app(url)
 

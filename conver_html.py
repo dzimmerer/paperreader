@@ -1,4 +1,5 @@
 import re
+import time
 import requests
 from bs4 import BeautifulSoup, NavigableString
 from markdownify import markdownify as md
@@ -67,7 +68,12 @@ def split_text(text, min_length=MIN_SENTENCE_LENGTH, max_length=MAX_SENTENCE_LEN
     current_length = 0
 
     for i, word in enumerate(words):
-        if current_length + len(word) + 1 <= max_length:
+        if word == "##break##":
+            # Split at the break point
+            chunks.append(current_chunk.replace("##break##", "").strip())
+            current_chunk = ""
+            current_length = 0
+        elif current_length + len(word) + 1 <= max_length:
             current_chunk += ("" if not current_chunk else " ") + word
             current_length += len(word) + 1
         else:
@@ -144,6 +150,14 @@ def mark_words_in_html(html: str, words: list, start_index: int) -> tuple:
     for word in words:
         # Find the first occurrence of the word after the current index
         position = html.find(word, current_index)
+        while position != -1:
+            # Check if the found word is within an HTML tag
+            if html.rfind("<", current_index, position) > html.rfind(">", current_index, position):
+                # Move the current index past the end of the tag
+                current_index = html.find(">", position) + 1
+                position = html.find(word, current_index)
+            else:
+                break
         if position == -1:
             # Word not found, skip to the next word
             continue
@@ -199,6 +213,11 @@ def get_html(url):
     # Extract all <div> elements with class "ltx_para" or ltx_figure and their IDs
     divs_with_ltx_para = soup.find_all(["div", "figure"], class_=["ltx_para", "ltx_figure", "ltx_table"])
 
+    # Remove all divs that are a child of another div already in the list
+    divs_with_ltx_para = [
+        div for div in divs_with_ltx_para if not any(parent in list(div.parents) for parent in divs_with_ltx_para)
+    ]
+
     div_ids_list = [div["id"] for div in divs_with_ltx_para if "id" in div.attrs]
 
     div_ids_list.insert(0, "ltx_abstract")
@@ -209,6 +228,7 @@ def get_html(url):
             "id": div["id"],
             "html": str(div),
             "div_obj": div,
+            "class": div["class"][0] if len(div["class"]) > 0 else "None",
             "type": "figure" if div.name == "figure" else "text",
             "title": (
                 div.parent.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "h7"], class_="ltx_title")[0]
@@ -225,6 +245,7 @@ def get_html(url):
     div_ids_dict["ltx_abstract"] = {
         "id": "ltx_abstract",
         "type": "abstract",
+        "class": "ltx_abstract",
         "html": str(soup.find("div", class_="ltx_abstract")),
         "div_obj": soup.find("div", class_="ltx_abstract"),
         "title": soup.find(["h1", "h2", "h3", "h4", "h5", "h6", "h7"], class_="ltx_title").get_text().strip()[:150]
@@ -274,29 +295,55 @@ def get_html(url):
     for note_tag in article_tag.find_all(class_="ltx_note_outer"):
         note_tag.replace_with("")
 
+    # Remove all nav tags from article
+    for nav_tag in article_tag.find_all("nav"):
+        nav_tag.replace_with("")
+
+    article_str = str(article_tag)
+
+    last_title = ""
+
     remove_list = []
 
     for div_id, div_info in tqdm(div_ids_dict.items(), desc="Processing divs"):
+
+        if div_id == "A2.EGx1":
+            print("xD")
+
         div_html = div_info["html"]
         div_soup = BeautifulSoup(div_html, "html.parser")
         div_html_str = str(div_soup)
 
         # get the html code up to this div in the article
-        prev_html = str(article_tag)[: str(article_tag).find(str(div_info["div_obj"]))]
-        next_html = str(article_tag)[str(article_tag).find(str(div_info["div_obj"])) + len(str(div_info["div_obj"])) :]
+
+        div_info_str = str(div_info["div_obj"])
+        div_position = article_str.find(div_info_str)
+
+        prev_html = article_str[:div_position]
+        next_html = article_str[div_position + len(div_info_str) :]
 
         div_ids_dict[div_id]["prev_html"] = prev_html
         div_ids_dict[div_id]["next_html"] = next_html
 
         # Replace/ Remove all tables
         for table_tag in div_soup.find_all("table"):
-            table_tag.replace_with("")
+            if (
+                "ltx_equationgroup" not in table_tag["class"]
+                and "ltx_equation" not in table_tag["class"]
+                and "ltx_eqn_table" not in table_tag["class"]
+            ):
+                table_tag.replace_with("")
 
         # Replace all math parts with their spoken text versions
         for math_tag in div_soup.find_all("math"):
             alttext = math_tag.get("alttext", "[Math not found]")
-            alttext = alttext.replace("\n", " ").replace("%", " ").strip()
-            math_tag.replace_with(f"${alttext}$")  # Replace the math tag with the alttext
+            alttext = alttext.replace("\n", " ").replace("%", " ").replace("&", " ").strip()
+            alttext = alttext.replace("\\begin{split}", "").replace("\\end{split}", "")
+            len_alttext = len(alttext)
+            if len_alttext > 100:
+                math_tag.replace_with(f" ##break## ${alttext}$ ##break## ")  # Replace the math tag with the alttext
+            else:
+                math_tag.replace_with(f"${alttext}$")  # Replace the math tag with the alttext
 
         # Replacce/ Remove all citations with class "ltx_cite"
         for cite_tag in div_soup.find_all("cite", class_="ltx_cite"):
@@ -329,11 +376,15 @@ def get_html(url):
             spoken_sentences.append(spoken_sentence)
         div_ids_dict[div_id]["sentences_spoken"] = spoken_sentences
 
+        if div_id.startswith("S3.SS1"):
+            print("xD")
+
         # Highlight each sentence / chunk in the div
         highlighted_divs = []
         start_highlight_index = 0
         for sentence in div_ids_dict[div_id]["sentences"]:
-            words = sentence.split()
+            temp_text = re.sub(r"\$.*?\$", lambda match: "", sentence)
+            words = temp_text.split()
             highlighted_div_html, start_highlight_index = mark_words_in_html(
                 str(div_html_str), words, start_highlight_index
             )
@@ -341,6 +392,12 @@ def get_html(url):
             # print(div_id, start_highlight_index)
 
         div_ids_dict[div_id]["highlighted_html"] = highlighted_divs
+
+        if div_info["title"] != last_title and div_info["title"] != "":
+            last_title = div_info["title"]
+            div_ids_dict[div_id]["sentences"].insert(0, last_title)
+            div_ids_dict[div_id]["sentences_spoken"].insert(0, last_title)
+            div_ids_dict[div_id]["highlighted_html"].insert(0, str(div_html_str))
 
     for div_id in remove_list:
         del div_ids_dict[div_id]
