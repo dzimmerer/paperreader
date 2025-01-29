@@ -36,7 +36,7 @@ class ReadingStatus:
 
 def get_tts_model():
     # tts = TTS("tts_models/en/jenny/jenny")
-    tts = KokoroInterface()
+    tts = KokoroInterface(voice_name="am")
 
     return tts
 
@@ -266,7 +266,9 @@ def thread_turn_sentence_to_audio(tts, wav_dict, div_ids_list, div_ids_dict, rea
 
             wav_resampled = librosa.resample(wav, orig_sr=24000, target_sr=SAMPLE_RATE)
 
-            wav_dict[(next_div_id, next_sentence_idx)] = wav_resampled[12000:-12000]
+            cut_off = int(12000 * (1 / reading_status.speed))
+
+            wav_dict[(next_div_id, next_sentence_idx)] = wav_resampled[cut_off:-cut_off]
 
         except Exception:
             print("Error processing sentence", sentence)
@@ -287,12 +289,14 @@ def async_highlight_trigger(wav_dict, next_queue, reading_status):
         if next_keys:
             if next_keys in wav_dict:
                 try:
-                    sd.play(wav_dict[next_keys], blocking=True, samplerate=SAMPLE_RATE, latency="low")
+                    if reading_status.current_play_state == "PLAY":
+                        sd.play(wav_dict[next_keys], blocking=True, samplerate=SAMPLE_RATE, latency="low")
                 except Exception:
                     print("Error playing audio")
                 reading_status.update_flag = True
                 reading_status.current_reading_status = "READ_TEXT"
-                del wav_dict[next_keys]
+                if next_keys in wav_dict:
+                    del wav_dict[next_keys]
                 next_keys = None
             else:
                 time.sleep(0.5)
@@ -346,8 +350,12 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom, prev_html
                             html.Div(
                                 # "Controls",
                                 [
-                                    html.Div("0", id="inp_div_id", style={"width": "2rem"}),
-                                    html.Div("0", id="inp_sentence_id", style={"width": "2rem"}),
+                                    html.Div(
+                                        "0", id="inp_div_id", style={"width": "2rem", "background-color": "white"}
+                                    ),
+                                    html.Div(
+                                        "0", id="inp_sentence_id", style={"width": "2rem", "background-color": "white"}
+                                    ),
                                     html.Button("<<", id="button_div_bckwrd"),
                                     html.Button("<", id="button_sent_bckwrd"),
                                     html.Button("play", id="button_play"),
@@ -363,10 +371,33 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom, prev_html
                                     "position": "fixed",
                                     "bottom": "0",
                                     "left": "0",
-                                    "background-color": "white",
+                                    "background-color": "rgba(255, 255, 255, 0.8)",
                                     "z-index": "3000",
                                 },
                                 id="bottom_controls",
+                            ),
+                            # Speed control: (on the right side)
+                            html.Div(
+                                [
+                                    html.Button("-", id="button_speed_decr"),
+                                    html.Button("+", id="button_speed_incr"),
+                                    html.Div(
+                                        "1.0",
+                                        id="voice_speed",
+                                        style={"width": "2rem", "background-color": "white", "margin-left": "1rem"},
+                                    ),
+                                ],
+                                style={
+                                    "display": "flex",
+                                    "justify-content": "space-between",
+                                    "padding": "10px",
+                                    "margin-bottom": "15vh",
+                                    "position": "fixed",
+                                    "bottom": "0",
+                                    "right": "40vw",
+                                    "background-color": "rgba(255, 255, 255, 0.8)",
+                                    "z-index": "3000",
+                                },
                             ),
                         ],
                         style={
@@ -421,7 +452,7 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom, prev_html
     )
 
 
-def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_dict):
+def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_dict, wav_dict):
     """Add the callbacks for the buttons."""
 
     @app.callback(
@@ -463,6 +494,7 @@ def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_
 
         reading_status.update_flag = True
         next_queue.clear()
+        reading_status.current_reading_status = "READY"
 
         return f"{reading_status.div_idx}", f"{reading_status.sentence_idx}"
 
@@ -484,6 +516,7 @@ def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_
 
         reading_status.update_flag = True
         next_queue.clear()
+        reading_status.current_reading_status = "READY"
 
         return f"{reading_status.div_idx}", f"{reading_status.sentence_idx}"
 
@@ -505,6 +538,7 @@ def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_
 
         reading_status.update_flag = True
         next_queue.clear()
+        reading_status.current_reading_status = "READY"
 
         return f"{reading_status.div_idx}", f"{reading_status.sentence_idx}"
 
@@ -526,6 +560,7 @@ def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_
 
         reading_status.update_flag = True
         next_queue.clear()
+        reading_status.current_reading_status = "READY"
 
         return f"{reading_status.div_idx}", f"{reading_status.sentence_idx}"
 
@@ -552,6 +587,42 @@ def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_
         else:
             return "🔓"
 
+    @app.callback(
+        Output("voice_speed", "children", allow_duplicate=True),
+        Input("button_speed_incr", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def update_speed_incr(n_clicks_incr):
+        if n_clicks_incr is None:
+            raise dash.exceptions.PreventUpdate
+
+        if n_clicks_incr:
+            reading_status.speed += 0.1
+
+        reading_status.speed = min(2.0, reading_status.speed)
+
+        wav_dict.clear()
+
+        return f"{reading_status.speed:.1f}"
+
+    @app.callback(
+        Output("voice_speed", "children", allow_duplicate=True),
+        Input("button_speed_decr", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def update_speed_decr(n_clicks_decr):
+        if n_clicks_decr is None:
+            raise dash.exceptions.PreventUpdate
+
+        if n_clicks_decr:
+            reading_status.speed -= 0.1
+
+        reading_status.speed = max(0.5, reading_status.speed)
+
+        wav_dict.clear()
+
+        return f"{reading_status.speed:.1f}"
+
 
 def add_speech_polling_callback(app, reading_status, next_queue, div_ids_list, div_ids_dict):
     """Add the callback for the speech polling."""
@@ -567,22 +638,17 @@ def add_speech_polling_callback(app, reading_status, next_queue, div_ids_list, d
     )
     def update_speech(_):
         if reading_status.current_play_state == "PLAY":
-            if reading_status.current_reading_status == "READ_TEXT":
-                reading_status.div_idx, reading_status.sentence_idx = incr_sentence_idx(
-                    reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
-                )
-                reading_status.current_reading_status = "READY"
             if reading_status.current_reading_status == "READY":
                 if div_ids_list[reading_status.div_idx] == "#end":
                     return
                 add_sentence_to_queue((div_ids_list[reading_status.div_idx], reading_status.sentence_idx))
                 reading_status.current_reading_status = "READING"
                 reading_status.update_flag = True
-            # elif reading_status.current_reading_status == "READ_TEXT":
-            #     reading_status.div_idx, reading_status.sentence_idx = incr_sentence_idx(
-            #         reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
-            #     )
-            #     reading_status.current_reading_status = "READY"
+            elif reading_status.current_reading_status == "READ_TEXT":
+                reading_status.div_idx, reading_status.sentence_idx = incr_sentence_idx(
+                    reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
+                )
+                reading_status.current_reading_status = "READY"
 
         return
 
@@ -742,7 +808,7 @@ def init_app(url):
 
     add_speech_polling_callback(app, reading_status, next_queue, div_ids_list, div_ids_dict)
     add_html_update_callback(app, div_ids_list, div_ids_dict, reading_status)
-    add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_dict)
+    add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_dict, wav_dict)
 
     return app
 
@@ -751,7 +817,7 @@ if __name__ == "__main__":
 
     # url = "https://arxiv.org/html/2412.06787v2"
     # url = "https://arxiv.org/html/2404.02905v2"
-    url = "https://arxiv.org/html/2501.12948v1"
+    url = "https://arxiv.org/html/2501.13926v1"
 
     app = init_app(url)
 

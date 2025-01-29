@@ -46,10 +46,13 @@ def process_latex_node(node):
             .replace("∀", " for all ")
             .replace("∃", " there exists ")
             .replace("∄", " there does not exist ")
+            .replace("∞", " infinity ")
+            .replace("∝", " proportional to ")
+            .replace(" |", " given ")
         )
         return chars
     elif isinstance(node, LatexMacroNode):
-        if node.macroname in ["left", "right"]:
+        if node.macroname in ["left", "right", "displaystyle", "textstyle", "scriptstyle", "scriptscriptstyle"]:
             return ""  # Skip the \left or \right macros
 
         # Ignore math fonts like \mathcal, \mathbb, \mathbf, etc.

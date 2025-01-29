@@ -73,6 +73,9 @@ def split_text(text, min_length=MIN_SENTENCE_LENGTH, max_length=MAX_SENTENCE_LEN
             chunks.append(current_chunk.replace("##break##", "").strip())
             current_chunk = ""
             current_length = 0
+        elif "\\parencite" in word:
+            # current_chunk.replace(word, "")
+            continue
         elif current_length + len(word) + 1 <= max_length:
             current_chunk += ("" if not current_chunk else " ") + word
             current_length += len(word) + 1
@@ -150,22 +153,51 @@ def mark_words_in_html(html: str, words: list, start_index: int) -> tuple:
     for word in words:
         # Find the first occurrence of the word after the current index
         position = html.find(word, current_index)
+        current_index0 = current_index
         while position != -1:
             # Check if the found word is within an HTML tag
             if html.rfind("<", current_index, position) > html.rfind(">", current_index, position):
                 # Move the current index past the end of the tag
-                current_index = html.find(">", position) + 1
+                current_index = html.find(">", max(current_index, position)) + 1
                 position = html.find(word, current_index)
-            else:
+            elif not html[position + len(word) : position + len(word) + 1].isalpha():
                 break
+            else:
+                # Move the current index past the found word
+                current_index = position + len(word)
+                position = html.find(word, current_index)
         if position == -1:
             # Word not found, skip to the next word
             continue
 
-        position_increment = position - current_index
+        position_increment = position - current_index0
+
+        inbetween_html = html[current_index:position]
+        inbetween_bs = BeautifulSoup(inbetween_html, "html.parser")
+
+        # remove all math tags
+        for math_tag in inbetween_bs.find_all("math"):
+            math_tag.replace_with("")
+
+        for cite_tag in inbetween_bs.find_all("cite"):
+            cite_tag.replace_with("")
+
+        text_inbetween = inbetween_bs.get_text()
+
+        if len(text_inbetween.split()) > 10:
+            # print(f"Skipping word {word} due to large inbetween text: {text_inbetween}")
+            continue
+
+        # len_math = 0
+        # if "@@" in inbetween_html:
+        #     # get all the text inbetween all @@number@@ in the inbetween_html
+        #     len_math_elems = re.findall(r"@@(.*?)@@", inbetween_html)
+        #     for math_elem in len_math_elems:
+        #         elem_len = int(math_elem)
+        #         len_math += elem_len - 4 - len(math_elem)
 
         # Update last position in the original string
-        last_position_in_original += position_increment + len(word)
+        last_position_in_original += position_increment + len(word)  # + len_math
 
         # Add <mark> tags around the found word
         html = f"{html[:position]}<mark>{word}</mark>{html[position + len(word):]}"
@@ -376,18 +408,35 @@ def get_html(url):
             spoken_sentences.append(spoken_sentence)
         div_ids_dict[div_id]["sentences_spoken"] = spoken_sentences
 
-        if div_id.startswith("S3.SS1"):
+        if div_id.startswith("S1.p5"):
             print("xD")
 
         # Highlight each sentence / chunk in the div
         highlighted_divs = []
         start_highlight_index = 0
+
+        filtered_div_html = BeautifulSoup(div_html, "html.parser")
+
+        m_idx_dict = {}
+        for m_idx, math_tag in enumerate(filtered_div_html.find_all("math")):
+            math_tag.replace_with("@@" + str(m_idx) + "@@")
+            m_idx_dict[m_idx] = str(math_tag)
+
+        filtered_div_html_str = str(filtered_div_html)
+
         for sentence in div_ids_dict[div_id]["sentences"]:
             temp_text = re.sub(r"\$.*?\$", lambda match: "", sentence)
             words = temp_text.split()
+            # remove all words with length < 2:
+            words = [word for word in words if len(word) > 1]
+
             highlighted_div_html, start_highlight_index = mark_words_in_html(
-                str(div_html_str), words, start_highlight_index
+                filtered_div_html_str, words, start_highlight_index
             )
+
+            for m_idx, math_tag in m_idx_dict.items():
+                highlighted_div_html = highlighted_div_html.replace(f"@@{m_idx}@@", math_tag)
+
             highlighted_divs.append(highlighted_div_html)
             # print(div_id, start_highlight_index)
 
