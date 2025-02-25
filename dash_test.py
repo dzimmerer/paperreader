@@ -1,11 +1,12 @@
 import threading
 import random
 import time
+import importlib
 
 from TTS.api import TTS
 import librosa
 import sounddevice as sd
-
+import soundcard as sc
 
 import dash
 from dash import dcc, html
@@ -22,6 +23,7 @@ from kokoro.interface import KokoroInterface
 
 
 SAMPLE_RATE = 44100
+DEFAULT_SPEED = 1.2
 
 
 class ReadingStatus:
@@ -31,7 +33,7 @@ class ReadingStatus:
         self.current_reading_status = "READY"
         self.current_play_state = "PAUSED"
         self.update_flag = False
-        self.speed = 1
+        self.speed = DEFAULT_SPEED
 
 
 def get_tts_model():
@@ -231,7 +233,7 @@ def thread_turn_sentence_to_audio(tts, wav_dict, div_ids_list, div_ids_dict, rea
         # sentence = s_queue_dict["sentence"]
         # sentence_id = s_queue_dict["sentence_id"]
 
-        while (next_div_id, next_sentence_idx) in wav_dict:
+        while (next_div_idx, next_sentence_idx) in wav_dict:
             next_div_idx, next_sentence_idx = incr_sentence_idx(
                 next_div_idx, next_sentence_idx, div_ids_list, div_ids_dict
             )
@@ -268,40 +270,73 @@ def thread_turn_sentence_to_audio(tts, wav_dict, div_ids_list, div_ids_dict, rea
 
             cut_off = int(12000 * (1 / reading_status.speed))
 
-            wav_dict[(next_div_id, next_sentence_idx)] = wav_resampled[cut_off:-cut_off]
+            wav_dict[(next_div_idx, next_sentence_idx)] = wav_resampled[cut_off:-cut_off]
 
         except Exception:
             print("Error processing sentence", sentence)
             pass
 
 
-def async_highlight_trigger(wav_dict, next_queue, reading_status):
+def async_play_audio(wav_dict, next_queue, reading_status):
     """Runs a background process that waits for a random time and sets the update flag."""
 
     next_keys = None
 
     while True:
-        if next_queue:
-            if not next_keys:
-                next_keys = next_queue.popleft()
-                print(f"Processing sentence: {next_keys}")
+        if reading_status.current_play_state == "PLAY":
+            if reading_status.current_reading_status == "READY":
 
-        if next_keys:
-            if next_keys in wav_dict:
-                try:
-                    if reading_status.current_play_state == "PLAY":
-                        sd.play(wav_dict[next_keys], blocking=True, samplerate=SAMPLE_RATE, latency="low")
-                except Exception:
-                    print("Error playing audio")
-                reading_status.update_flag = True
-                reading_status.current_reading_status = "READ_TEXT"
-                if next_keys in wav_dict:
-                    del wav_dict[next_keys]
-                next_keys = None
-            else:
-                time.sleep(0.5)
+                next_div_idx = reading_status.div_idx
+                next_sentence_idx = reading_status.sentence_idx
+
+                if (next_div_idx, next_sentence_idx) in wav_dict:
+                    next_keys = (next_div_idx, next_sentence_idx)
+                    try:
+                        if reading_status.current_play_state == "PLAY":
+                            reading_status.current_reading_status = "READING"
+                            reading_status.update_flag = True
+                            sc.default_speaker().play(
+                                wav_dict[next_keys],
+                                samplerate=SAMPLE_RATE,
+                            )
+                            # sd.play(wav_dict[next_keys], blocking=True, samplerate=SAMPLE_RATE, latency="low")
+                    except Exception:
+                        print("Error playing audio")
+                        # importlib.reload(sd)
+                        reading_status.current_reading_status = "READY"
+
+                    reading_status.update_flag = True
+                    reading_status.current_reading_status = "READ_TEXT"
+                    if next_keys in wav_dict:
+                        del wav_dict[next_keys]
+                    next_keys = None
+                else:
+                    time.sleep(0.2)
+
+                # if next_queue:
+                #     next_keys = next_queue.popleft()
+                #     print(f"Processing sentence: {next_keys}")
+        # if next_queue:
+        #     if not next_keys:
+        #         next_keys = next_queue.popleft()
+        #         print(f"Processing sentence: {next_keys}")
+
+        # if next_keys:
+        #     if next_keys in wav_dict:
+        #         try:
+        #             if reading_status.current_play_state == "PLAY":
+        #                 sd.play(wav_dict[next_keys], blocking=True, samplerate=SAMPLE_RATE, latency="low")
+        #         except Exception:
+        #             print("Error playing audio")
+        #         reading_status.update_flag = True
+        #         reading_status.current_reading_status = "READ_TEXT"
+        #         if next_keys in wav_dict:
+        #             del wav_dict[next_keys]
+        #         next_keys = None
+        #     else:
+        #         time.sleep(0.5)
         else:
-            time.sleep(0.5)
+            time.sleep(0.2)
 
 
 def set_app_layout(app, sec_title, html_left, html_right, html_bottom, prev_html, next_html):
@@ -382,7 +417,7 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom, prev_html
                                     html.Button("-", id="button_speed_decr"),
                                     html.Button("+", id="button_speed_incr"),
                                     html.Div(
-                                        "1.0",
+                                        f"{DEFAULT_SPEED:.1f}",
                                         id="voice_speed",
                                         style={"width": "2rem", "background-color": "white", "margin-left": "1rem"},
                                     ),
@@ -411,7 +446,11 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom, prev_html
                     ),
                     # Right section (40%)
                     html.Div(
-                        dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_right),
+                        html.Div(
+                            dash_dangerously_set_inner_html.DangerouslySetInnerHTML(html_right),
+                            style={"transform": "scale(0.5)", "transform-origin": "top left", "width": "70vw"},
+                            id="pap_figure",
+                        ),
                         style={
                             "width": "39vw",
                             "display": "inline-block",
@@ -422,7 +461,7 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom, prev_html
                             "height": "85vh",
                             "overflow": "scroll",
                         },
-                        id="pap_figure",
+                        # id="pap_figure",
                     ),
                 ],
                 style={"height": "85vh"},
@@ -472,7 +511,8 @@ def add_button_callbacks(app, reading_status, next_queue, div_ids_list, div_ids_
             reading_status.current_reading_status = "READY"
             return "pause", True
         else:
-            sd.stop()
+            # sd.stop()
+            # sc.stop()
             reading_status.current_play_state = "PAUSED"
             return "play", False
 
@@ -641,14 +681,15 @@ def add_speech_polling_callback(app, reading_status, next_queue, div_ids_list, d
             if reading_status.current_reading_status == "READY":
                 if div_ids_list[reading_status.div_idx] == "#end":
                     return
-                add_sentence_to_queue((div_ids_list[reading_status.div_idx], reading_status.sentence_idx))
-                reading_status.current_reading_status = "READING"
+                # add_sentence_to_queue((div_ids_list[reading_status.div_idx], reading_status.sentence_idx))
+                # reading_status.current_reading_status = "READING"
                 reading_status.update_flag = True
             elif reading_status.current_reading_status == "READ_TEXT":
                 reading_status.div_idx, reading_status.sentence_idx = incr_sentence_idx(
                     reading_status.div_idx, reading_status.sentence_idx, div_ids_list, div_ids_dict
                 )
                 reading_status.current_reading_status = "READY"
+                reading_status.update_flag = True
 
         return
 
@@ -802,7 +843,7 @@ def init_app(url):
 
     # Start the background thread
     trigger_thread = threading.Thread(
-        target=async_highlight_trigger, args=(wav_dict, next_queue, reading_status), daemon=True
+        target=async_play_audio, args=(wav_dict, next_queue, reading_status), daemon=True
     )
     trigger_thread.start()
 
@@ -817,7 +858,14 @@ if __name__ == "__main__":
 
     # url = "https://arxiv.org/html/2412.06787v2"
     # url = "https://arxiv.org/html/2404.02905v2"
-    url = "https://arxiv.org/html/2501.13926v1"
+    url = "http://arxiv.org/abs/2502.01341"
+
+    if "/abs/" in url:
+        url = url.replace("/abs/", "/html/")
+    elif "/pdf/" in url:
+        url = url.replace("/pdf/", "/html/")
+    elif "/ps/" in url:
+        url = url.replace("/ps/", "/html/")
 
     app = init_app(url)
 
