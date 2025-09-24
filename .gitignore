@@ -1,0 +1,113 @@
+# ---- General ----
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.orig
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Virtual environments
+.env
+.venv
+venv/
+env/
+
+# Packaging / build
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+.wheels/
+
+# PyInstaller
+*.spec
+
+# Logs / profiling
+*.log
+profile.dat
+.prof
+
+# Coverage / test
+.coverage
+.coverage.*
+htmlcov/
+.cache/
+.pytest_cache/
+.tox/
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+
+# Jupyter / IPython
+.ipynb_checkpoints/
+
+# Local data / artifacts
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.opus
+
+# Model weights / large checkpoints (keep directory but ignore files)
+kokoro/voices/*.pt
+!kokoro/voices/.keep
+*.pth
+*.ckpt
+*.onnx
+
+# Temporary text outputs
+podcast_transcript.json
+spoken_text.txt
+openai_output.wav
+output.wav
+
+# ---- Node / Frontend ----
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# npm / yarn / pnpm logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Env files (if added later)
+*.env
+*.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ---- Mac OS ----
+.AppleDouble
+.LSOverride
+Icon?
+__MACOSX/
+
+# ---- Editor / IDE ----
+.vscode/
+.idea/
+*.iml
+.sourcemaps/
+
+# ---- Misc ----
+# Backup files
+*~
+# Python byte-compiled in nested dirs
+**/__pycache__/
+
+# Prevent committing large raw HTML dumps if any
+*.html.dump
+
+# Generated audio chunk caches (if added later)
+audio_cache/

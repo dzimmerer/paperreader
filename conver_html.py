@@ -492,4 +492,36 @@ def get_html(url):
 
 
 if __name__ == "__main__":
-    get_html()
+    url = "https://arxiv.org/html/2502.08769v1"
+
+    xd = get_html(url=url)
+
+    spoken_texts = []
+    for div_id in xd[0]:
+        for sentence in xd[1][div_id].get("sentences_spoken", []):
+            spoken_texts.append(sentence)
+
+    spoken_text = "\n".join(spoken_texts)
+
+    with open("spoken_text.txt", "w", encoding="utf-8") as f:
+        f.write(spoken_text)
+
+    response = requests.get(url)
+
+    if response.status_code == 200:
+        html_content = response.content
+    else:
+        raise Exception(f"Failed to fetch the page. Status code: {response.status_code}")
+
+    # Step 2: Parse the HTML using BeautifulSoup
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    # Step 3: Locate the "article" HTML tag
+    article_tag = soup.find(id="bib")
+
+    bib_text = article_tag.get_text().replace("\n", " ").replace("  ", " ").strip()
+
+    with open("bib_text.txt", "w", encoding="utf-8") as f:
+        f.write(bib_text)
+
+    print(xd)

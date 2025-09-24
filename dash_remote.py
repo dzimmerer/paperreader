@@ -20,7 +20,6 @@ from collections import deque
 import logging
 
 from kokoro.interface import KokoroInterface
-from local_tts_interface import DockerTTSInterface
 
 
 SAMPLE_RATE = 44100
@@ -40,10 +39,6 @@ class ReadingStatus:
 def get_tts_model():
     # tts = TTS("tts_models/en/jenny/jenny")
     tts = KokoroInterface(voice_name="am")
-    # tts = DockerTTSInterface(
-    #     base_url="http://localhost:8880/v1/audio/speech",
-    #     voice="am_adam",
-    # )
 
     return tts
 
@@ -863,7 +858,7 @@ if __name__ == "__main__":
 
     # url = "https://arxiv.org/html/2412.06787v2"
     # url = "https://arxiv.org/html/2404.02905v2"
-    url = "https://arxiv.org/abs/2505.10562"
+    url = "https://arxiv.org/html/2503.15485v1"
 
     if "/abs/" in url:
         url = url.replace("/abs/", "/html/")

@@ -1,0 +1,70 @@
+body {
+  margin: 0;
+  font-family: system-ui, Arial, sans-serif;
+}
+#root {
+  height: 100vh;
+}
+
+.layout {
+  display: flex;
+  height: 85vh;
+}
+.left-pane {
+  width: 59vw;
+  padding: 10px;
+  overflow-y: auto;
+}
+.right-pane {
+  width: 39vw;
+  padding: 10px;
+  overflow-y: auto;
+}
+.bottom-bar {
+  height: 15vh;
+  padding: 10px;
+  background: #f8f9fa;
+}
+.controls {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  gap: 0.5rem;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.85);
+  z-index: 3000;
+}
+.speed-controls {
+  position: fixed;
+  bottom: 0;
+  right: 40vw;
+  display: flex;
+  gap: 0.5rem;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.85);
+  z-index: 3000;
+}
+.sentences {
+  text-align: center;
+  font-size: 1.05em;
+}
+.figure-scale {
+  transform: scale(0.5);
+  transform-origin: top left;
+  width: 70vw;
+}
+.sec-title-highlight {
+  background: yellow;
+}
+.html-block {
+  width: 55vw;
+  display: inline-block;
+}
+.prev-next-wrapper {
+  height: 75vh;
+  overflow-y: scroll;
+}
+button {
+  cursor: pointer;
+}
