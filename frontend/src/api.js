@@ -7,13 +7,6 @@ const json = async (url, opts = {}) => {
   return r.json();
 };
 
-export async function createSession(url) {
-  return json("/api/session", {
-    method: "POST",
-    body: JSON.stringify({ url }),
-  });
-}
-
 export async function getState(sessionId) {
   return json(`/api/session/${sessionId}/state`);
 }

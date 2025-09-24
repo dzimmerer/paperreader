@@ -247,10 +247,22 @@ def create_app() -> Flask:
             abort(404, description="Session not found")
         return sess
 
-    @app.route("/api/session", methods=["POST"])
+    @app.route("/api/session", methods=["POST", "GET"])
     def create_session():
-        data = request.get_json(force=True)
-        url = data.get("url")
+        """Create a new reading session.
+
+        POST: expects JSON body {"url": "..."}
+        GET:  expects query parameter ?url=...
+        """
+        if request.method == "POST":
+            try:
+                data = request.get_json(force=True)
+            except Exception:
+                return jsonify({"error": "Invalid JSON body"}), 400
+            url = (data or {}).get("url") if data else None
+        else:  # GET
+            url = request.args.get("url")
+
         if not url:
             return jsonify({"error": "url required"}), 400
         sess = ReadingSession(url=url)

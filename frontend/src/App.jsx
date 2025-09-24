@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { createSession, getState, control, fetchAudioBlob } from './api.js';
+import { getState, control, fetchAudioBlob } from './api.js';
 import Controls from './components/Controls.jsx';
 import SpeedControls from './components/SpeedControls.jsx';
 import ContentView from './components/ContentView.jsx';
@@ -20,9 +20,41 @@ export default function App() {
   // Create session
   async function startSession(e) {
     e.preventDefault();
-    const { session_id } = await createSession(urlInput);
-    setSessionId(session_id);
+    // Navigate to a shareable GET-based reading page
+    const target = `/read?url=${encodeURIComponent(urlInput.trim())}`;
+    // Use pushState to avoid full reload (still triggers effect) and remain SPA; fallback reload if needed
+    window.history.pushState({}, '', target);
+    // Trigger session creation effect manually (will detect new query param)
+    triggerSessionFromQuery();
   }
+
+  // Helper to parse query param and create a session via GET endpoint
+  const triggerSessionFromQuery = async () => {
+    const params = new URLSearchParams(window.location.search);
+    const urlParam = params.get('url');
+    if(!urlParam) return;
+    if(sessionId) return; // already have session
+    try {
+      const r = await fetch(`/api/session?url=${encodeURIComponent(urlParam)}`);
+      if(!r.ok) throw new Error('Failed to create session');
+      const data = await r.json();
+      setSessionId(data.session_id);
+      setUrlInput(urlParam);
+    } catch(err) {
+      // eslint-disable-next-line no-console
+      console.error('Session creation error', err);
+    }
+  };
+
+  // On initial mount or when path changes (user manual navigation / back button), try to create session
+  useEffect(() => {
+    triggerSessionFromQuery();
+    // Listen to popstate for back/forward navigation
+    const handler = () => triggerSessionFromQuery();
+    window.addEventListener('popstate', handler);
+    return () => window.removeEventListener('popstate', handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Poll state
   useEffect(() => {
