@@ -8,7 +8,7 @@ body {
 
 .layout {
   display: flex;
-  height: 85vh;
+  height: 80vh;
 }
 .left-pane {
   width: 59vw;
@@ -21,7 +21,7 @@ body {
   overflow-y: auto;
 }
 .bottom-bar {
-  height: 15vh;
+  height: 20vh;
   padding: 10px;
   background: #f8f9fa;
 }
@@ -50,9 +50,20 @@ body {
   font-size: 1.05em;
 }
 .figure-scale {
-  transform: scale(0.5);
-  transform-origin: top left;
-  width: 70vw;
+  /* Removed transform scaling so the figure uses full pane width */
+  width: 100%;
+  max-width: 100%;
+  /* Reset any previous transform */
+  transform: none;
+  transform-origin: initial;
+}
+/* Ensure inner visual elements stretch responsively */
+.figure-scale img,
+.figure-scale svg,
+.figure-scale canvas {
+  width: 100%;
+  height: auto;
+  display: block;
 }
 .sec-title-highlight {
   background: yellow;
@@ -67,4 +78,18 @@ body {
 }
 button {
   cursor: pointer;
+  padding: 0.55rem 1rem; /* larger click target */
+  font-size: 1rem; /* increase text size */
+  line-height: 1.2;
+  min-height: 42px; /* consistent height */
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  background: #ffffff;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+button:hover {
+  background: #f0f0f0;
+}
+button:active {
+  transform: translateY(1px);
 }
