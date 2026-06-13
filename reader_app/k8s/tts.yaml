@@ -23,20 +23,27 @@ spec:
             - containerPort: 5102
           env:
             - name: TTS_ENGINE
-              value: "espeak"
+              value: "kokoro"
+            - name: TTS_VOICE
+              value: "af_sarah"
+            - name: TTS_DEVICE
+              value: "cpu"        # no GPU inside minikube; CPU is best for Kokoro
             - name: TTS_PORT
               value: "5102"
+          # startupProbe gives the model time to load before liveness kicks in.
+          startupProbe:
+            httpGet: { path: /health, port: 5102 }
+            failureThreshold: 30
+            periodSeconds: 5
           readinessProbe:
             httpGet: { path: /health, port: 5102 }
-            initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet: { path: /health, port: 5102 }
-            initialDelaySeconds: 15
             periodSeconds: 20
           resources:
-            requests: { cpu: "100m", memory: "128Mi" }
-            limits: { cpu: "1", memory: "512Mi" }
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits: { cpu: "4", memory: "3Gi" }
 ---
 apiVersion: v1
 kind: Service

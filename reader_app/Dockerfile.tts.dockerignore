@@ -1,0 +1,25 @@
+# Per-Dockerfile ignore for the Kokoro TTS image. Unlike the repo-root
+# .dockerignore (which drops the model weights to keep the backend/frontend
+# contexts small), this one KEEPS kokoro/ since the TTS image needs the
+# weights + voice packs. Everything else heavy/irrelevant is still excluded.
+.git
+.venv
+venv
+**/__pycache__
+**/*.pyc
+**/node_modules
+*.wav
+frontend
+reader_app/frontend
+reader_app/k8s
+olds_assets
+assets
+podcast_transcript.json
+bib_text.txt
+spoken_text.txt
+*.bak
+.DS_Store
+**/.DS_Store
+.claude
+chatterbox
+# kokoro/ is deliberately NOT excluded here.

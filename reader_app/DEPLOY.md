@@ -16,7 +16,7 @@ The app runs as **three containers**, orchestrated by Kubernetes:
 |-----------|-------|------|-------|
 | frontend  | `paperreader-frontend` (nginx) | 80 (NodePort 30080) | serves the SPA, reverse-proxies `/api/` to `backend` |
 | backend   | `paperreader-backend`  | 5101 | parsing/serving API; `TTS_URL=http://tts:5102` |
-| tts       | `paperreader-tts`      | 5102 | espeak-ng engine by default |
+| tts       | `paperreader-tts`      | 5102 | Kokoro neural voices (CPU) by default; espeak-ng opt-in |
 
 nginx proxying `/api/` to the backend means the browser sees a single origin —
 no CORS, and the frontend's relative URLs work unchanged.
@@ -72,34 +72,36 @@ kubectl delete namespace paperreader        # remove everything
   `client_max_body_size 64m` and a 300s proxy read timeout to accommodate
   large PDFs and first-request synthesis latency.
 
-## Using neural Kokoro voices instead of espeak
+## TTS engine & device
 
-The default `tts` image uses **espeak-ng** so the deployment works anywhere with
-no model download. To use the higher-quality Kokoro voices:
+The `tts` image ships **Kokoro** neural voices by default (`Dockerfile.tts`
+bundles `kokoro/` weights + voice packs; `Dockerfile.tts.dockerignore` keeps
+them in the build context while the root `.dockerignore` excludes them from the
+backend/frontend images). Configure via env in `k8s/tts.yaml`:
 
-1. Build a Kokoro-enabled image. Add `torch`, `phonemizer`, `munch` to the pip
-   install and copy the model into the image (the build context is the repo
-   root, so adjust `.dockerignore` to stop excluding `kokoro/`):
+| Env | Default | Notes |
+|-----|---------|-------|
+| `TTS_ENGINE` | `kokoro` | `kokoro`, `espeak`, or `say` (macOS host only) |
+| `TTS_VOICE`  | `af_sarah` | any pack in `kokoro/voices/` (e.g. `am_adam`, `bf_emma`) |
+| `TTS_DEVICE` | `cpu` | `cpu`, `cuda`, or `mps`; `auto` → cuda-if-present else cpu |
 
-   ```dockerfile
-   # Dockerfile.tts-kokoro (sketch)
-   FROM python:3.11-slim
-   RUN apt-get update && apt-get install -y --no-install-recommends \
-         espeak-ng libsndfile1 git && rm -rf /var/lib/apt/lists/*
-   RUN pip install --no-cache-dir flask flask-cors numpy soundfile \
-         torch --index-url https://download.pytorch.org/whl/cpu
-   RUN pip install --no-cache-dir phonemizer munch
-   COPY kokoro/ /app/kokoro/
-   COPY reader_app/tts_server.py /app/reader_app/tts_server.py
-   WORKDIR /app/reader_app
-   ENV TTS_ENGINE=kokoro TTS_VOICE=af_sarah
-   CMD ["python", "tts_server.py"]
-   ```
+The `kokoro/voices/*.pt` packs and `kokoro-v0_19.pth` are git-ignored, so make
+sure they exist locally before building — they must be in the build context.
 
-   The `kokoro/voices/*.pt` packs are git-ignored — make sure they exist locally
-   before building, since they must be in the build context.
+### Why CPU (and the GPU story)
 
-2. Point `k8s/tts.yaml` at the new image and set `TTS_ENGINE=kokoro`.
+Inside minikube there is **no GPU**: Docker Desktop's Linux VM exposes neither
+Apple Metal/MPS nor NVIDIA, so the pod runs Kokoro on CPU. On Apple Silicon CPU
+is in fact the *fastest* option for Kokoro anyway — its iSTFT vocoder calls
+`aten::angle`, which the MPS backend doesn't implement, so forcing `TTS_DEVICE=mps`
+(with `PYTORCH_ENABLE_MPS_FALLBACK=1`) ends up **slower** than CPU due to per-op
+CPU round-trips. `tts_server.py` will try the requested device and fall back to
+CPU automatically if an op is unsupported.
 
-Note: without a GPU (minikube runs on CPU) Kokoro synthesis is much slower than
-espeak; the backend's prefetching hides some of this latency.
+To actually accelerate Kokoro you need a **CUDA** GPU: install a CUDA torch
+build in `Dockerfile.tts`, expose the GPU to the cluster (e.g. the NVIDIA device
+plugin), and set `TTS_DEVICE=cuda`. For Apple-Silicon GPU you'd have to run the
+TTS process *natively on macOS* (outside minikube) — out of scope for this
+in-cluster deployment.
+
+To skip the model entirely, set `TTS_ENGINE=espeak` (tiny, no weights needed).
