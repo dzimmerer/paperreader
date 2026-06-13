@@ -25,8 +25,17 @@ no CORS, and the frontend's relative URLs work unchanged.
 
 ```bash
 cd reader_app
-./deploy.sh
+./deploy.sh                       # all-in-cluster (TTS container, CPU)
 minikube service frontend -n paperreader   # opens the app in your browser
+```
+
+For **realtime** TTS on Apple Silicon, use native-TTS mode (see below):
+
+```bash
+cd reader_app
+./deploy.sh --native-tts          # cluster talks to a host TTS
+./run-native-tts.sh               # separate terminal — keep running
+minikube service frontend -n paperreader
 ```
 
 `deploy.sh` starts minikube if needed, builds the three images **inside
@@ -88,20 +97,42 @@ backend/frontend images). Configure via env in `k8s/tts.yaml`:
 The `kokoro/voices/*.pt` packs and `kokoro-v0_19.pth` are git-ignored, so make
 sure they exist locally before building — they must be in the build context.
 
-### Why CPU (and the GPU story)
+### Realtime: run Kokoro natively (`--native-tts`)
 
-Inside minikube there is **no GPU**: Docker Desktop's Linux VM exposes neither
-Apple Metal/MPS nor NVIDIA, so the pod runs Kokoro on CPU. On Apple Silicon CPU
-is in fact the *fastest* option for Kokoro anyway — its iSTFT vocoder calls
-`aten::angle`, which the MPS backend doesn't implement, so forcing `TTS_DEVICE=mps`
-(with `PYTORCH_ENABLE_MPS_FALLBACK=1`) ends up **slower** than CPU due to per-op
-CPU round-trips. `tts_server.py` will try the requested device and fall back to
-CPU automatically if an op is unsupported.
+Measured Kokoro speed (real-time factor = wall ÷ audio seconds; lower is faster,
+`<1.0` is faster than realtime):
 
-To actually accelerate Kokoro you need a **CUDA** GPU: install a CUDA torch
-build in `Dockerfile.tts`, expose the GPU to the cluster (e.g. the NVIDIA device
-plugin), and set `TTS_DEVICE=cuda`. For Apple-Silicon GPU you'd have to run the
-TTS process *natively on macOS* (outside minikube) — out of scope for this
-in-cluster deployment.
+| Where Kokoro runs | RTF | Verdict |
+|-------------------|-----|---------|
+| In-cluster container (Docker Desktop Linux VM, Apple Silicon) | **~1.7** | slower than realtime → a pause before every sentence |
+| Natively on the macOS host (PyTorch + Apple Accelerate) | **~0.21** | ~4.7× realtime → prefetch always stays ahead, no pauses |
+
+The container is slow not because of thread count or CPU limits (raising both
+didn't help) but because PyTorch CPU inference in the Linux VM has no access to
+Apple's Accelerate/AMX backend and pays virtualization overhead — roughly 7×
+slower than the same code run natively.
+
+So for realtime on Apple Silicon, run the TTS **natively** and let the cluster
+reach it:
+
+```bash
+./deploy.sh --native-tts     # frontend+backend in-cluster; tts = ExternalName
+./run-native-tts.sh          # native Kokoro server on the host :5102
+```
+
+`k8s/tts-native.yaml` makes the `tts` service an **ExternalName** pointing at
+`host.minikube.internal`, so the backend's `TTS_URL=http://tts:5102` transparently
+routes to the host process — no backend change needed. Switch back to the
+all-in-cluster container with `./deploy.sh` (re-applies `tts.yaml`).
+
+### GPU notes
+
+Inside minikube there is **no GPU** (Docker Desktop's Linux VM exposes neither
+Metal/MPS nor NVIDIA). Even natively, Apple's GPU does *not* help Kokoro: its
+iSTFT vocoder calls `aten::angle`, unimplemented on MPS, so `TTS_DEVICE=mps`
+(with `PYTORCH_ENABLE_MPS_FALLBACK=1`) is *slower* than CPU — native CPU +
+Accelerate is the sweet spot. `tts_server.py` tries the requested device and
+falls back to CPU if an op is unsupported. A real **CUDA** GPU does help: install
+a CUDA torch build and set `TTS_DEVICE=cuda`.
 
 To skip the model entirely, set `TTS_ENGINE=espeak` (tiny, no weights needed).
