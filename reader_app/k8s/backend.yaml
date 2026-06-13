@@ -34,8 +34,10 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 20
           resources:
-            requests: { cpu: "200m", memory: "256Mi" }
-            limits: { cpu: "2", memory: "1Gi" }
+            # PDF parsing (pymupdf4llm page pixmaps + Tesseract OCR) can spike
+            # memory on large papers; 1Gi OOM-killed the MAI-Thinking PDF.
+            requests: { cpu: "200m", memory: "512Mi" }
+            limits: { cpu: "2", memory: "3Gi" }
 ---
 apiVersion: v1
 kind: Service
