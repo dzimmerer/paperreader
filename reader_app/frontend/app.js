@@ -22,6 +22,8 @@ const els = {
   nextBtn: document.getElementById("next-btn"),
   speedSelect: document.getElementById("speed-select"),
   progress: document.getElementById("progress"),
+  fileLabel: document.getElementById("file-label"),
+  cancelBtn: document.getElementById("cancel-btn"),
 };
 
 const state = {
@@ -32,6 +34,7 @@ const state = {
   audioCache: new Map(), // idx -> Promise<{src, timings, duration}>
   activeWordEl: null,
   rafId: null,
+  loadController: null, // AbortController for the in-flight document load
 };
 
 const audio = new Audio();
@@ -56,30 +59,48 @@ function updateProgress() {
 // Document loading + rendering
 // ---------------------------------------------------------------------------
 
+// Toggle the loading state: disable the input controls and show the cancel "✕".
+function setLoading(loading) {
+  els.loadBtn.disabled = loading;
+  els.urlInput.disabled = loading;
+  els.fileInput.disabled = loading;
+  els.fileLabel.classList.toggle("disabled", loading);
+  els.cancelBtn.classList.toggle("hidden", !loading);
+}
+
+function cancelLoad() {
+  if (state.loadController) state.loadController.abort();
+}
+
 async function loadFromUrl(url) {
-  if (!url) return;
-  await loadDoc(fetch("/api/doc", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
-  }));
+  if (!url || state.loadController) return;
+  await loadDoc((signal) =>
+    fetch("/api/doc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+      signal,
+    }),
+  );
 }
 
 async function loadFromFile(file) {
+  if (state.loadController) return;
   const form = new FormData();
   form.append("file", file, file.name);
-  await loadDoc(fetch("/api/doc", { method: "POST", body: form }));
+  await loadDoc((signal) => fetch("/api/doc", { method: "POST", body: form, signal }));
 }
 
-async function loadDoc(responsePromise) {
+async function loadDoc(makeRequest) {
   stopPlayback();
   state.doc = null;
   state.audioCache.clear();
   state.current = -1;
+  state.loadController = new AbortController();
+  setLoading(true);
   setStatus("Parsing document…");
-  els.loadBtn.disabled = true;
   try {
-    const resp = await responsePromise;
+    const resp = await makeRequest(state.loadController.signal);
     const doc = await resp.json();
     if (!resp.ok) throw new Error(doc.error || `HTTP ${resp.status}`);
     state.doc = doc;
@@ -88,9 +109,14 @@ async function loadDoc(responsePromise) {
     setStatus(`Loaded (${doc.source}, ${doc.num_sentences} sentences)`);
     setCurrent(0, { scroll: false });
   } catch (err) {
-    setStatus(`Error: ${err.message}`, true);
+    if (err.name === "AbortError") {
+      setStatus("Cancelled");
+    } else {
+      setStatus(`Error: ${err.message}`, true);
+    }
   } finally {
-    els.loadBtn.disabled = false;
+    state.loadController = null;
+    setLoading(false);
   }
 }
 
@@ -429,6 +455,8 @@ els.fileInput.addEventListener("change", () => {
   if (els.fileInput.files.length) loadFromFile(els.fileInput.files[0]);
   els.fileInput.value = "";
 });
+
+els.cancelBtn.addEventListener("click", cancelLoad);
 
 els.playBtn.addEventListener("click", togglePlay);
 els.prevBtn.addEventListener("click", () => jumpTo(state.current - 1));
