@@ -1,0 +1,11 @@
+# Static frontend served by nginx, which also reverse-proxies /api/ to the
+# backend service so the browser sees a single origin (no CORS).
+# Build context must be the REPO ROOT.
+FROM nginx:1.27-alpine
+
+COPY reader_app/frontend/nginx.conf /etc/nginx/conf.d/default.conf
+COPY reader_app/frontend/index.html /usr/share/nginx/html/index.html
+COPY reader_app/frontend/style.css /usr/share/nginx/html/style.css
+COPY reader_app/frontend/app.js /usr/share/nginx/html/app.js
+
+EXPOSE 80

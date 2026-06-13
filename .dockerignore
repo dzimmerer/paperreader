@@ -1,0 +1,23 @@
+# Keep build contexts small: only reader_app/ + mathtex2text.py are needed by
+# the container images. Exclude large model weights, audio, caches, and vendored
+# node modules.
+.git
+.venv
+venv
+**/__pycache__
+**/*.pyc
+**/node_modules
+*.wav
+*.json.bak
+kokoro/voices
+kokoro/*.pth
+olds_assets
+assets
+frontend
+podcast_transcript.json
+*.txt
+!requirements.txt
+!reader_app/requirements.txt
+.DS_Store
+**/.DS_Store
+.claude

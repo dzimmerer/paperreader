@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tts
+  namespace: paperreader
+  labels: { app: tts }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: tts }
+  template:
+    metadata:
+      labels: { app: tts }
+    spec:
+      # Disable legacy service-link env vars (e.g. an injected TTS_PORT=tcp://…
+      # would shadow our own TTS_PORT and crash the server).
+      enableServiceLinks: false
+      containers:
+        - name: tts
+          image: paperreader-tts:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5102
+          env:
+            - name: TTS_ENGINE
+              value: "espeak"
+            - name: TTS_PORT
+              value: "5102"
+          readinessProbe:
+            httpGet: { path: /health, port: 5102 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 5102 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "1", memory: "512Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tts
+  namespace: paperreader
+spec:
+  selector: { app: tts }
+  ports:
+    - port: 5102
+      targetPort: 5102
