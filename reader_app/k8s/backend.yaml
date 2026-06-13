@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: paperreader
+  labels: { app: backend }
+spec:
+  # Single replica: documents and audio cache live in process memory.
+  replicas: 1
+  selector:
+    matchLabels: { app: backend }
+  template:
+    metadata:
+      labels: { app: backend }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: backend
+          image: paperreader-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5101
+          env:
+            - name: TTS_URL
+              value: "http://tts:5102"
+            - name: READER_PORT
+              value: "5101"
+          readinessProbe:
+            httpGet: { path: /api/health, port: 5101 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/health, port: 5101 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: "200m", memory: "256Mi" }
+            limits: { cpu: "2", memory: "1Gi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: paperreader
+spec:
+  selector: { app: backend }
+  ports:
+    - port: 5101
+      targetPort: 5101

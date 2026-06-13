@@ -1,0 +1,15 @@
+# Paper Reader app (reader_app/)
+flask
+flask-cors
+requests
+beautifulsoup4
+pylatexenc        # LaTeX -> spoken text (mathtex2text.py in repo root)
+pymupdf4llm       # layout-aware PDF -> markdown (headings, columns, images, OCR)
+pypdf             # fallback PDF text extraction
+numpy
+soundfile         # WAV encoding in the TTS server
+
+# Optional, only needed for the Kokoro TTS engine (tts_server.py):
+# torch
+# phonemizer
+# munch

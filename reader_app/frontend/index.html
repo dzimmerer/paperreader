@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Paper Reader</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
+        integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous" />
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"
+          integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg" crossorigin="anonymous"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header id="topbar">
+    <span id="logo">📖 Paper Reader</span>
+    <input id="url-input" type="text" placeholder="https://arxiv.org/abs/2412.06787  —  or any HTML / PDF URL" />
+    <button id="load-btn">Load</button>
+    <label id="file-label" class="btn" title="Open a local PDF">
+      Open PDF
+      <input id="file-input" type="file" accept="application/pdf,.pdf" hidden />
+    </label>
+    <span id="status"></span>
+  </header>
+
+  <main id="paper">
+    <div id="placeholder">
+      <h2>Listen to a paper</h2>
+      <p>Paste an arXiv link (abs / pdf / html), any article URL, or open a local PDF.</p>
+      <p>arXiv links are resolved to the parsed HTML version when available, otherwise the PDF is parsed.</p>
+      <p>Press <b>play</b> and each sentence is read aloud — the spoken sentence is highlighted in
+        <span class="demo-sent">light yellow<span> </span><span class="demo-word">and the spoken word</span> in dark yellow</span>.
+      </p>
+      <p>Click any sentence to jump to it. Keyboard: <kbd>Space</kbd> play/pause, <kbd>←</kbd>/<kbd>→</kbd> previous/next sentence.</p>
+    </div>
+  </main>
+
+  <footer id="controls" class="hidden">
+    <button id="prev-btn" title="Previous sentence (←)">⏮</button>
+    <button id="play-btn" title="Play / pause (Space)">▶</button>
+    <button id="next-btn" title="Next sentence (→)">⏭</button>
+    <select id="speed-select" title="Playback speed">
+      <option value="0.8">0.8×</option>
+      <option value="1" selected>1×</option>
+      <option value="1.25">1.25×</option>
+      <option value="1.5">1.5×</option>
+      <option value="1.75">1.75×</option>
+      <option value="2">2×</option>
+    </select>
+    <span id="progress"></span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
