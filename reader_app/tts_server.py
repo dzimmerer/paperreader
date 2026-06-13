@@ -57,16 +57,61 @@ def _wav_bytes(audio: np.ndarray, sample_rate: int) -> tuple[bytes, float]:
 class KokoroEngine:
     name = "kokoro"
 
-    def __init__(self, voice_name: str = "af_sarah") -> None:
+    def __init__(self, voice_name: str = "af_sarah", device: Optional[str] = None) -> None:
         # KokoroInterface loads weights via paths relative to the repo root
         os.chdir(REPO_ROOT)
         from kokoro.interface import KokoroInterface
 
         self._tts = KokoroInterface(voice_name=voice_name)
         self._trim_db = 35
+        # Pick a compute device. KokoroInterface itself only knows cuda/cpu, so
+        # we relocate the model + voice pack here to also support Apple Silicon
+        # (MPS). generate_full derives its device from the voice-pack tensor.
+        self.device = self._resolve_device(device)
+        if self.device != "cpu":
+            self._move_to(self.device)
+        print(f"[tts] Kokoro voice '{voice_name}' on device '{self.device}'")
+
+    @staticmethod
+    def _resolve_device(requested: Optional[str]) -> str:
+        import torch
+
+        choice = (requested or os.environ.get("TTS_DEVICE") or "auto").lower()
+        if choice == "auto":
+            # NOTE: Apple MPS is intentionally NOT auto-selected. Kokoro's iSTFT
+            # vocoder uses aten::angle, which MPS does not implement; with
+            # PYTORCH_ENABLE_MPS_FALLBACK=1 it runs but the per-op CPU round
+            # trips make it slower than plain CPU. Force it with TTS_DEVICE=mps
+            # if you still want to try. CUDA, when present, is a real win.
+            return "cuda" if torch.cuda.is_available() else "cpu"
+        return choice
+
+    def _move_to(self, device: str) -> None:
+        """Move every nn.Module in the Kokoro model (a Munch) + the voice pack
+        onto ``device``; fall back to CPU if the backend rejects an op."""
+        try:
+            model = self._tts.model
+            submodules = model.values() if hasattr(model, "values") else vars(model).values()
+            for sub in submodules:
+                if hasattr(sub, "to"):
+                    sub.to(device)
+            self._tts.voice_pack = self._tts.voice_pack.to(device)
+        except Exception as exc:  # pragma: no cover - device-specific
+            print(f"[tts] could not use device '{device}' ({exc!r}); falling back to CPU")
+            self.device = "cpu"
 
     def synthesize(self, text: str, speed: float, voice: Optional[str]) -> tuple[bytes, int, float]:
-        audio = self._tts.generate_audio(text, speed=speed)
+        try:
+            audio = self._tts.generate_audio(text, speed=speed)
+        except Exception as exc:
+            # MPS/accelerator op gaps can surface only at generation time.
+            if self.device != "cpu":
+                print(f"[tts] generation failed on '{self.device}' ({exc!r}); retrying on CPU")
+                self._move_to("cpu")
+                self.device = "cpu"
+                audio = self._tts.generate_audio(text, speed=speed)
+            else:
+                raise
         audio = np.asarray(audio, dtype=np.float32)
         audio = self._trim_silence(audio)
         wav, duration = _wav_bytes(audio, self._tts.sample_rate)

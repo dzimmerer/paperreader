@@ -1,6 +1,15 @@
+import os
+
 from phonemizer.backend.espeak.wrapper import EspeakWrapper
 
-EspeakWrapper.set_library("/opt/homebrew/Cellar/espeak-ng/1.52.0/lib/libespeak-ng.1.dylib")
+# Path to the espeak-ng shared library. Defaults to the macOS Homebrew location;
+# override with ESPEAK_LIBRARY (e.g. the Linux .so inside a container). If the
+# resolved path doesn't exist, let phonemizer auto-detect the system library.
+_ESPEAK_LIBRARY = os.environ.get(
+    "ESPEAK_LIBRARY", "/opt/homebrew/Cellar/espeak-ng/1.52.0/lib/libespeak-ng.1.dylib"
+)
+if os.path.exists(_ESPEAK_LIBRARY):
+    EspeakWrapper.set_library(_ESPEAK_LIBRARY)
 
 import phonemizer
 import re

@@ -1,22 +1,42 @@
-# TTS backend. Defaults to the espeak-ng engine, which is lightweight and runs
-# anywhere (no GPU, no model download). To use neural Kokoro voices instead,
-# see reader_app/DEPLOY.md (requires torch + the kokoro/ weights & voices).
-# Build context must be the REPO ROOT.
+# TTS backend — Kokoro neural voices by default (CPU).
+#
+# GPU note: inside minikube there is no GPU (Docker Desktop's Linux VM has no
+# Metal/MPS or NVIDIA passthrough), so this image runs Kokoro on CPU — which is
+# also the fastest option for Kokoro on Apple Silicon (its iSTFT vocoder uses an
+# op MPS lacks). To use a real CUDA GPU, install a CUDA torch build and set
+# TTS_DEVICE=cuda. To fall back to the tiny espeak engine, set TTS_ENGINE=espeak.
+#
+# Build context must be the REPO ROOT (needs kokoro/ weights + voices); see
+# Dockerfile.tts.dockerignore, which (unlike the root .dockerignore) keeps them.
 FROM python:3.11-slim
 
+# espeak-ng: phonemizer backend Kokoro relies on. libsndfile1: soundfile I/O.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends espeak-ng libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir flask flask-cors numpy soundfile
+# CPU-only torch wheel keeps the image far smaller than the default CUDA build.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir \
+        flask flask-cors numpy scipy soundfile phonemizer munch transformers
 
+# kokoro/main.py loads the espeak-ng library from ESPEAK_LIBRARY (its default is
+# a macOS Homebrew path absent here). Pin it to the Linux .so via a stable,
+# arch-independent symlink.
+RUN ln -sf "$(find / -name 'libespeak-ng.so.1' -print -quit)" /usr/local/lib/libespeak-ng.so.1
+ENV ESPEAK_LIBRARY=/usr/local/lib/libespeak-ng.so.1
+
+# Kokoro model code + weights (kokoro-v0_19.pth) + voice packs.
+COPY kokoro/ /app/kokoro/
 COPY reader_app/tts_server.py /app/reader_app/tts_server.py
 
 WORKDIR /app/reader_app
 
-ENV TTS_ENGINE=espeak \
+ENV TTS_ENGINE=kokoro \
+    TTS_VOICE=af_sarah \
+    TTS_DEVICE=cpu \
     TTS_PORT=5102 \
     PYTHONUNBUFFERED=1
 
