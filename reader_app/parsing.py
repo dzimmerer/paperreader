@@ -27,12 +27,14 @@ word weight so word-highlight timing stays roughly aligned.
 from __future__ import annotations
 
 import io
+import ipaddress
 import os
 import re
+import socket
 import sys
 import uuid
 from typing import Any, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup, NavigableString, Tag
@@ -49,6 +51,46 @@ Sentence = dict[str, Any]
 
 USER_AGENT = "PaperReaderApp/0.1 (local research tool)"
 REQUEST_TIMEOUT = 30
+MAX_REDIRECTS = 5
+ALLOWED_SCHEMES = {"http", "https"}
+
+
+def _is_blocked_ip(ip_str: str) -> bool:
+    """True if the address is non-public (loopback/private/link-local/etc.)."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local  # incl. 169.254.169.254 cloud metadata
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+def _validate_public_url(url: str) -> None:
+    """SSRF guard: only http(s), and the host must resolve to public IPs.
+
+    Raises ValueError if the URL would let the server reach an internal/
+    loopback/link-local address (cloud metadata, cluster services, etc.).
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ALLOWED_SCHEMES:
+        raise ValueError(f"Only http/https URLs are allowed (got '{parsed.scheme or 'none'}')")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL has no host")
+    try:
+        addrinfos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80))
+    except socket.gaierror:
+        raise ValueError(f"Could not resolve host '{host}'")
+    for info in addrinfos:
+        ip = info[4][0]
+        if _is_blocked_ip(ip):
+            raise ValueError(f"Refusing to fetch a non-public address ({host} -> {ip})")
 
 MIN_SENTENCE_LENGTH = 30
 MAX_SENTENCE_LENGTH = 280
@@ -601,9 +643,29 @@ def _assemble(
 
 
 def _fetch(url: str) -> requests.Response:
-    resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
-    return resp
+    """Fetch a URL with SSRF protection, validating every redirect hop.
+
+    Redirects are followed manually so an attacker can't bounce a public URL to
+    an internal one (each Location is re-validated before we connect to it).
+    """
+    current = url
+    for _ in range(MAX_REDIRECTS + 1):
+        _validate_public_url(current)
+        resp = requests.get(
+            current,
+            headers={"User-Agent": USER_AGENT},
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=False,
+        )
+        if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
+            location = resp.headers.get("Location")
+            if not location:
+                break
+            current = urljoin(current, location)
+            continue
+        resp.raise_for_status()
+        return resp
+    raise ValueError("Too many redirects")
 
 
 def load_document(url: Optional[str] = None, pdf_bytes: Optional[bytes] = None, filename: str = "") -> Document:

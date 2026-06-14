@@ -15,6 +15,13 @@ spec:
       # Disable legacy service-link env vars (e.g. an injected TTS_PORT=tcp://…
       # would shadow our own TTS_PORT and crash the server).
       enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: tts
           image: paperreader-tts:latest
@@ -30,6 +37,15 @@ spec:
               value: "cpu"        # no GPU inside minikube; CPU is best for Kokoro
             - name: TTS_PORT
               value: "5102"
+            - name: HOME
+              value: "/tmp"
+            - name: TMPDIR
+              value: "/tmp"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
           # startupProbe gives the model time to load before liveness kicks in.
           startupProbe:
             httpGet: { path: /health, port: 5102 }
@@ -44,6 +60,8 @@ spec:
           resources:
             requests: { cpu: "500m", memory: "1Gi" }
             limits: { cpu: "4", memory: "3Gi" }
+      volumes:
+        - { name: tmp, emptyDir: {} }
 ---
 apiVersion: v1
 kind: Service
