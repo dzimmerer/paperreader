@@ -72,6 +72,30 @@ kubectl -n paperreader logs deploy/tts
 kubectl delete namespace paperreader        # remove everything
 ```
 
+## Deploying to a remote Linux server (k3s, public)
+
+On a real x86 Linux box (where CPU Kokoro is realtime — unlike the Apple-Silicon
+Docker VM), you can run the whole stack in-cluster and expose it publicly:
+
+```bash
+# on the server (needs passwordless sudo), with the app source under ~/paperreader
+./reader_app/deploy-server.sh
+```
+
+It installs Docker + k3s, builds the three images, imports them into k3s, and
+exposes the frontend on **NodePort 30080 behind HTTP basic auth** (user `reader`,
+a random password printed at the end / stored in `~/paperreader/.reader_password`).
+Open the firewall for 30080 (the script does `ufw allow` if ufw is active; a
+provider-level firewall may also need it).
+
+The TTS pod here uses the **public `kokoro` package** (`Dockerfile.tts.pkg`,
+`TTS_ENGINE=kokoro-pkg`) which pulls Kokoro-82M weights from HuggingFace at build
+time — so no model weights are shipped from a dev machine. `bench_tts.py`
+measures the real-time factor on the host.
+
+> Basic auth over plain HTTP sends credentials unencrypted. For real public use,
+> front it with TLS (e.g. a domain + cert-manager/Traefik or a reverse proxy).
+
 ## Notes
 
 - **State is in-memory.** The backend keeps parsed documents and the audio

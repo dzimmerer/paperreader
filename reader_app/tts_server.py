@@ -131,6 +131,48 @@ class KokoroEngine:
         return audio[start:end]
 
 
+class KokoroPackageEngine:
+    """Kokoro via the public `kokoro` pip package (Kokoro-82M, weights pulled
+    from HuggingFace). Used where the repo's vendored weights aren't available
+    (e.g. a remote server we can't ship the weights to)."""
+
+    name = "kokoro-pkg"
+    SAMPLE_RATE = 24000
+
+    def __init__(self, voice: str = "af_heart", lang_code: Optional[str] = None) -> None:
+        # Point phonemizer at the pip-bundled espeak-ng if no system one exists.
+        try:
+            import espeakng_loader
+            from phonemizer.backend.espeak.wrapper import EspeakWrapper
+
+            EspeakWrapper.set_library(espeakng_loader.get_library_path())
+            if hasattr(EspeakWrapper, "set_data_path"):
+                EspeakWrapper.set_data_path(espeakng_loader.get_data_path())
+        except Exception:
+            pass
+
+        import torch
+
+        n_threads = os.environ.get("TTS_NUM_THREADS")
+        if n_threads:
+            torch.set_num_threads(int(n_threads))
+
+        from kokoro import KPipeline
+
+        self.voice = voice
+        self._pipe = KPipeline(lang_code=lang_code or os.environ.get("KOKORO_LANG", "a"))
+        print(f"[tts] Kokoro (public package) voice '{voice}'")
+
+    def synthesize(self, text: str, speed: float, voice: Optional[str]) -> tuple[bytes, int, float]:
+        chunks = []
+        for _, _, audio in self._pipe(text, voice=voice or self.voice, speed=speed):
+            arr = audio.detach().cpu().numpy() if hasattr(audio, "detach") else np.asarray(audio)
+            chunks.append(arr.astype(np.float32))
+        audio = np.concatenate(chunks) if chunks else np.zeros(1, dtype=np.float32)
+        wav, duration = _wav_bytes(audio, self.SAMPLE_RATE)
+        return wav, self.SAMPLE_RATE, duration
+
+
 class SayEngine:
     """macOS built-in `say` command (CoreSpeech). Zero extra dependencies."""
 
@@ -176,6 +218,9 @@ class EspeakEngine:
 def build_engine() -> TTSEngine:
     requested = os.environ.get("TTS_ENGINE", "auto").lower()
     voice = os.environ.get("TTS_VOICE", "")
+
+    if requested == "kokoro-pkg":
+        return KokoroPackageEngine(voice=voice or "af_heart")
 
     if requested in ("kokoro", "auto"):
         try:
