@@ -18,9 +18,11 @@ API:
 
 from __future__ import annotations
 
+import json
 import os
+import tempfile
 import threading
-from collections import OrderedDict
+import time
 from typing import Any, Optional
 
 import requests
@@ -35,7 +37,6 @@ FRONTEND_DIR = os.path.join(APP_DIR, "frontend")
 PORT = int(os.environ.get("READER_PORT", "5101"))
 TTS_URL = os.environ.get("TTS_URL", "http://localhost:5102")
 TTS_TIMEOUT = 180
-MAX_AUDIO_CACHE = 80
 PREFETCH_AHEAD = 3
 
 # Per-word constant overhead (in weight units) so short words still get time
@@ -43,36 +44,80 @@ WORD_BASE_WEIGHT = 2.0
 # Estimated leading silence in the synthesized audio (seconds)
 LEAD_PAD = 0.05
 
+# Documents, images, and per-sentence audio live on a shared filesystem (not in
+# process memory) so multiple gunicorn workers see the same data and a restart
+# doesn't lose loaded papers. Workers in one container share this directory.
+DATA_DIR = os.environ.get("READER_DATA_DIR") or os.path.join(tempfile.gettempdir(), "paperreader_docs")
+os.makedirs(DATA_DIR, exist_ok=True)
 
-class DocumentStore:
-    """In-memory documents plus per-sentence audio cache and prefetching."""
-
-    def __init__(self) -> None:
-        self._docs: dict[str, dict[str, Any]] = {}
-        self._lock = threading.Lock()
-
-    def add(self, doc: dict[str, Any]) -> None:
-        images = doc.pop("_images", [])  # keep binary data out of the JSON doc
-        flat: list[dict[str, Any]] = []
-        for block in doc["blocks"]:
-            flat.extend(block["sentences"])
-        flat.sort(key=lambda s: s["idx"])
-        with self._lock:
-            self._docs[doc["doc_id"]] = {
-                "doc": doc,
-                "flat": flat,
-                "images": images,
-                "audio": OrderedDict(),
-                "inflight": set(),
-                "audio_lock": threading.Lock(),
-            }
-
-    def get(self, doc_id: str) -> Optional[dict[str, Any]]:
-        with self._lock:
-            return self._docs.get(doc_id)
+# Avoid two threads/workers synthesizing the same sentence concurrently.
+_inflight_lock = threading.Lock()
 
 
-STORE = DocumentStore()
+def _doc_dir(doc_id: str) -> str:
+    return os.path.join(DATA_DIR, doc_id)
+
+
+def _audio_path(doc_id: str, idx: int) -> str:
+    return os.path.join(_doc_dir(doc_id), "audio", f"{idx}.json")
+
+
+def _load_json(path: str) -> Optional[Any]:
+    try:
+        with open(path, "rb") as f:
+            return json.loads(f.read())
+    except Exception:
+        return None
+
+
+def _atomic_write_bytes(path: str, data: bytes) -> None:
+    tmp = f"{path}.tmp.{os.getpid()}.{threading.get_ident()}"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
+
+
+def _atomic_write_json(path: str, obj: Any) -> None:
+    _atomic_write_bytes(path, json.dumps(obj).encode())
+
+
+def store_add(doc: dict[str, Any]) -> None:
+    """Persist a parsed document (JSON), its flat sentence list, and images."""
+    images = doc.pop("_images", [])
+    flat: list[dict[str, Any]] = []
+    for block in doc["blocks"]:
+        flat.extend(block["sentences"])
+    flat.sort(key=lambda s: s["idx"])
+
+    d = _doc_dir(doc["doc_id"])
+    os.makedirs(os.path.join(d, "audio"), exist_ok=True)
+    manifest = []
+    for i, img in enumerate(images):
+        _atomic_write_bytes(os.path.join(d, f"img_{i}.bin"), img["data"])
+        manifest.append({"mime": img["mime"]})
+    _atomic_write_json(os.path.join(d, "images.json"), manifest)
+    _atomic_write_json(os.path.join(d, "flat.json"), flat)
+    # Write doc.json last: its presence marks the document as fully stored.
+    _atomic_write_json(os.path.join(d, "doc.json"), doc)
+
+
+def store_doc(doc_id: str) -> Optional[dict[str, Any]]:
+    return _load_json(os.path.join(_doc_dir(doc_id), "doc.json"))
+
+
+def store_flat(doc_id: str) -> Optional[list[dict[str, Any]]]:
+    return _load_json(os.path.join(_doc_dir(doc_id), "flat.json"))
+
+
+def store_image(doc_id: str, n: int) -> Optional[tuple[str, bytes]]:
+    manifest = _load_json(os.path.join(_doc_dir(doc_id), "images.json"))
+    if not isinstance(manifest, list) or n < 0 or n >= len(manifest):
+        return None
+    bin_path = os.path.join(_doc_dir(doc_id), f"img_{n}.bin")
+    if not os.path.exists(bin_path):
+        return None
+    with open(bin_path, "rb") as f:
+        return manifest[n]["mime"], f.read()
 
 
 def estimate_timings(weights: list[float], duration: float) -> list[dict[str, float]]:
@@ -88,31 +133,46 @@ def estimate_timings(weights: list[float], duration: float) -> list[dict[str, fl
     return timings
 
 
-def generate_audio_entry(entry: dict[str, Any], idx: int) -> Optional[dict[str, Any]]:
-    """Fetch TTS audio for sentence ``idx`` and attach word timings (cached)."""
-    with entry["audio_lock"]:
-        if idx in entry["audio"]:
-            return entry["audio"][idx]
-        if idx in entry["inflight"]:
-            inflight = True
-        else:
-            entry["inflight"].add(idx)
-            inflight = False
-    if inflight:
-        # Another thread is generating it; wait briefly for the result
-        for _ in range(600):
-            with entry["audio_lock"]:
-                if idx in entry["audio"]:
-                    return entry["audio"][idx]
-                if idx not in entry["inflight"]:
-                    break
-            threading.Event().wait(0.2)
+def generate_audio_entry(doc_id: str, idx: int) -> Optional[dict[str, Any]]:
+    """Return cached audio+timings for sentence ``idx`` or synthesize it.
+
+    Cached on the shared filesystem. A lock-directory claim makes generation
+    safe across threads and gunicorn worker processes: whoever creates the lock
+    dir synthesizes; others wait for the result file to appear.
+    """
+    path = _audio_path(doc_id, idx)
+    cached = _load_json(path)
+    if cached is not None:
+        return cached
+
+    flat = store_flat(doc_id)
+    if flat is None or idx < 0 or idx >= len(flat):
         return None
 
+    lock = path + ".lock"
+    claimed = False
     try:
-        if idx < 0 or idx >= len(entry["flat"]):
-            return None
-        sentence = entry["flat"][idx]
+        os.mkdir(lock)  # atomic across processes
+        claimed = True
+    except FileExistsError:
+        claimed = False
+    except FileNotFoundError:
+        return None  # doc dir vanished
+
+    if not claimed:
+        for _ in range(900):  # ~180s
+            result = _load_json(path)
+            if result is not None:
+                return result
+            if not os.path.exists(lock):
+                break
+            time.sleep(0.2)
+        return _load_json(path)
+
+    try:
+        with _inflight_lock:
+            pass  # (intra-process serialization handled by the lock dir)
+        sentence = flat[idx]
         resp = requests.post(
             f"{TTS_URL}/tts",
             json={"text": sentence["spoken"], "speed": 1.0},
@@ -128,26 +188,28 @@ def generate_audio_entry(entry: dict[str, Any], idx: int) -> Optional[dict[str, 
             "duration": payload["duration"],
             "timings": estimate_timings(sentence["weights"], payload["duration"]),
         }
-        with entry["audio_lock"]:
-            entry["audio"][idx] = result
-            while len(entry["audio"]) > MAX_AUDIO_CACHE:
-                entry["audio"].popitem(last=False)
+        _atomic_write_json(path, result)
         return result
     except Exception as exc:
-        print(f"[server] audio generation failed for sentence {idx}: {exc}")
+        print(f"[server] audio generation failed for {doc_id}#{idx}: {exc}")
         return None
     finally:
-        with entry["audio_lock"]:
-            entry["inflight"].discard(idx)
+        try:
+            os.rmdir(lock)
+        except OSError:
+            pass
 
 
-def prefetch(entry: dict[str, Any], start_idx: int) -> None:
+def prefetch(doc_id: str, start_idx: int) -> None:
+    flat = store_flat(doc_id)
+    if flat is None:
+        return
+    total = len(flat)
+
     def _run() -> None:
-        for idx in range(start_idx, min(start_idx + PREFETCH_AHEAD, len(entry["flat"]))):
-            with entry["audio_lock"]:
-                cached = idx in entry["audio"] or idx in entry["inflight"]
-            if not cached:
-                generate_audio_entry(entry, idx)
+        for idx in range(start_idx, min(start_idx + PREFETCH_AHEAD, total)):
+            if not os.path.exists(_audio_path(doc_id, idx)):
+                generate_audio_entry(doc_id, idx)
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -174,38 +236,34 @@ def create_app() -> Flask:
                 doc = load_document(url=url)
         except Exception as exc:
             return jsonify({"error": f"Failed to load document: {exc}"}), 422
-        STORE.add(doc)
-        entry = STORE.get(doc["doc_id"])
-        if entry is not None:
-            prefetch(entry, 0)
+        store_add(doc)
+        prefetch(doc["doc_id"], 0)
         return jsonify(doc)
 
     @app.route("/api/doc/<doc_id>", methods=["GET"])
     def get_doc(doc_id: str):
-        entry = STORE.get(doc_id)
-        if entry is None:
+        doc = store_doc(doc_id)
+        if doc is None:
             abort(404, description="Document not found")
-        return jsonify(entry["doc"])
+        return jsonify(doc)
 
     @app.route("/api/doc/<doc_id>/img/<int:n>", methods=["GET"])
     def get_image(doc_id: str, n: int):
-        entry = STORE.get(doc_id)
-        if entry is None:
-            abort(404, description="Document not found")
-        if n < 0 or n >= len(entry["images"]):
+        img = store_image(doc_id, n)
+        if img is None:
             abort(404, description="Image not found")
-        img = entry["images"][n]
-        return Response(img["data"], mimetype=img["mime"])
+        mime, data = img
+        return Response(data, mimetype=mime)
 
     @app.route("/api/doc/<doc_id>/audio/<int:idx>", methods=["GET"])
     def get_audio(doc_id: str, idx: int):
-        entry = STORE.get(doc_id)
-        if entry is None:
+        flat = store_flat(doc_id)
+        if flat is None:
             abort(404, description="Document not found")
-        if idx < 0 or idx >= len(entry["flat"]):
+        if idx < 0 or idx >= len(flat):
             return jsonify({"error": "sentence index out of range"}), 404
-        result = generate_audio_entry(entry, idx)
-        prefetch(entry, idx + 1)
+        result = generate_audio_entry(doc_id, idx)
+        prefetch(doc_id, idx + 1)
         if result is None:
             return jsonify({"error": "audio not available (is the TTS server running?)"}), 503
         return jsonify(result)

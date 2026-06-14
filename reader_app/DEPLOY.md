@@ -98,9 +98,17 @@ measures the real-time factor on the host.
 
 ## Notes
 
-- **State is in-memory.** The backend keeps parsed documents and the audio
-  cache in process memory, so it runs as a single replica; deleting the pod
-  clears loaded papers.
+- **Servers.** Both services run under **gunicorn**. The backend is real
+  multi-worker (`--workers 3 --threads 4`); the TTS service is `--workers 1`
+  (one Kokoro model in memory) with threads.
+- **State is on a shared filesystem** (`READER_DATA_DIR`, default a temp dir),
+  not process memory — so all gunicorn workers in the pod see the same parsed
+  documents / images / audio cache, and a worker crash doesn't lose them. It is
+  shared across *workers in one pod*, not across replicas: keep the backend at
+  `replicas: 1` (or switch the store to a shared volume / Redis to scale out).
+- **PDF uploads / long TTS calls.** nginx is configured with
+  `client_max_body_size 64m` and a 300s proxy read timeout to accommodate
+  large PDFs and first-request synthesis latency.
 - **PDF uploads / long TTS calls.** nginx is configured with
   `client_max_body_size 64m` and a 300s proxy read timeout to accommodate
   large PDFs and first-request synthesis latency.

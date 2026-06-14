@@ -10,7 +10,7 @@ RUN apt-get update \
 WORKDIR /app
 
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir flask flask-cors numpy soundfile kokoro "misaki[en]" espeakng-loader
+    && pip install --no-cache-dir flask flask-cors numpy soundfile kokoro "misaki[en]" espeakng-loader gunicorn
 
 # Pre-fetch the spaCy model (misaki English G2P) and warm the Kokoro weights so
 # the pod is ready immediately and needs no network at runtime.
@@ -37,4 +37,8 @@ ENV TTS_ENGINE=kokoro-pkg \
     PYTHONUNBUFFERED=1
 
 EXPOSE 5102
-CMD ["python", "tts_server.py"]
+# Single gunicorn worker: one Kokoro model in memory (multi-worker would load it
+# N times and synthesis is CPU-bound on these cores anyway). Threads give
+# concurrency; the model itself is serialized by a lock inside the engine.
+CMD ["gunicorn", "--workers", "1", "--threads", "4", "--timeout", "300", \
+     "--bind", "0.0.0.0:5102", "tts_server:create_app()"]
