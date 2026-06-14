@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import threading
 import time
@@ -59,7 +60,18 @@ os.makedirs(DATA_DIR, exist_ok=True)
 _inflight_lock = threading.Lock()
 
 
+# doc_ids are uuid4().hex[:12]; validate strictly before using them in a path so
+# a crafted id (e.g. "..%2f..") can't escape DATA_DIR (path traversal).
+_DOC_ID_RE = re.compile(r"^[A-Za-z0-9]{1,64}$")
+
+
+def _valid_doc_id(doc_id: str) -> bool:
+    return bool(_DOC_ID_RE.match(doc_id))
+
+
 def _doc_dir(doc_id: str) -> str:
+    if not _valid_doc_id(doc_id):
+        raise ValueError("invalid doc_id")
     return os.path.join(DATA_DIR, doc_id)
 
 
@@ -268,6 +280,8 @@ def prefetch(doc_id: str, start_idx: int) -> None:
 
 def create_app() -> Flask:
     app = Flask(__name__, static_folder=FRONTEND_DIR, static_url_path="")
+    # Cap request bodies (PDF uploads) as defense-in-depth behind nginx's limit.
+    app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024
     CORS(app)
 
     @app.route("/")
@@ -294,6 +308,8 @@ def create_app() -> Flask:
 
     @app.route("/api/doc/<doc_id>", methods=["GET"])
     def get_doc(doc_id: str):
+        if not _valid_doc_id(doc_id):
+            abort(404, description="Document not found")
         doc = store_doc(doc_id)
         if doc is None:
             abort(404, description="Document not found")
@@ -302,6 +318,8 @@ def create_app() -> Flask:
 
     @app.route("/api/doc/<doc_id>/img/<int:n>", methods=["GET"])
     def get_image(doc_id: str, n: int):
+        if not _valid_doc_id(doc_id):
+            abort(404, description="Image not found")
         img = store_image(doc_id, n)
         if img is None:
             abort(404, description="Image not found")
@@ -310,6 +328,8 @@ def create_app() -> Flask:
 
     @app.route("/api/doc/<doc_id>/audio/<int:idx>", methods=["GET"])
     def get_audio(doc_id: str, idx: int):
+        if not _valid_doc_id(doc_id):
+            abort(404, description="Document not found")
         flat = store_flat(doc_id)
         if flat is None:
             abort(404, description="Document not found")

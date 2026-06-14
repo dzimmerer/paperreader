@@ -53,6 +53,7 @@ USER_AGENT = "PaperReaderApp/0.1 (local research tool)"
 REQUEST_TIMEOUT = 30
 MAX_REDIRECTS = 5
 ALLOWED_SCHEMES = {"http", "https"}
+MAX_DOWNLOAD_BYTES = 60 * 1024 * 1024  # cap fetched bodies (memory / zip-bomb DoS)
 
 
 def _is_blocked_ip(ip_str: str) -> bool:
@@ -656,13 +657,30 @@ def _fetch(url: str) -> requests.Response:
             headers={"User-Agent": USER_AGENT},
             timeout=REQUEST_TIMEOUT,
             allow_redirects=False,
+            stream=True,
         )
         if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
             location = resp.headers.get("Location")
+            resp.close()
             if not location:
                 break
             current = urljoin(current, location)
             continue
+        # Enforce a size cap while streaming (covers lying/absent Content-Length
+        # and decompression bombs, since iter_content yields decoded bytes).
+        declared = resp.headers.get("Content-Length")
+        if declared and declared.isdigit() and int(declared) > MAX_DOWNLOAD_BYTES:
+            resp.close()
+            raise ValueError("Document exceeds the size limit")
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in resp.iter_content(64 * 1024):
+            total += len(chunk)
+            if total > MAX_DOWNLOAD_BYTES:
+                resp.close()
+                raise ValueError("Document exceeds the size limit")
+            chunks.append(chunk)
+        resp._content = b"".join(chunks)  # populate .content/.text for callers
         resp.raise_for_status()
         return resp
     raise ValueError("Too many redirects")

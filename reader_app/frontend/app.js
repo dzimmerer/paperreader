@@ -187,12 +187,19 @@ function renderDoc(doc) {
 
   const source = document.createElement("div");
   source.className = "doc-source";
-  const link = document.createElement("a");
-  link.href = doc.url;
-  link.target = "_blank";
-  link.rel = "noopener";
-  link.textContent = doc.url;
-  source.append(`source: ${doc.source} — `, link);
+  // Only render the source as a clickable link if it's a safe http(s) URL,
+  // otherwise show it as plain text (guards against javascript:/data: hrefs).
+  const isHttp = /^https?:\/\//i.test(doc.url || "");
+  if (isHttp) {
+    const link = document.createElement("a");
+    link.href = doc.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = doc.url;
+    source.append(`source: ${doc.source} — `, link);
+  } else {
+    source.textContent = `source: ${doc.source} — ${doc.url || ""}`;
+  }
   els.paper.appendChild(source);
 
   for (const block of doc.blocks) {
