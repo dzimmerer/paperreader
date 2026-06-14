@@ -107,7 +107,7 @@ sudo k3s kubectl apply -f reader_app/k8s/tls-ingress.yaml
 
 This serves `https://<host>` (443) with a cert issued via the ACME HTTP-01
 challenge (needs port 80 reachable from the internet) and redirects plain HTTP
-to HTTPS. cert-manager renews automatically. Live example: **https://dzim.site**.
+to HTTPS. cert-manager renews automatically. Live example: **https://reader.dzim.site**.
 The `:30080` NodePort remains as a plain-HTTP fallback — close it (make the
 frontend Service `ClusterIP`) once you only use the ingress.
 

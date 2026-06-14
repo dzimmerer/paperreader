@@ -43,10 +43,10 @@ metadata:
 spec:
   ingressClassName: traefik
   tls:
-    - hosts: [dzim.site]
-      secretName: dzim-site-tls
+    - hosts: [reader.dzim.site]
+      secretName: reader-dzim-site-tls
   rules:
-    - host: dzim.site
+    - host: reader.dzim.site
       http:
         paths:
           - path: /
@@ -69,7 +69,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: dzim.site
+    - host: reader.dzim.site
       http:
         paths:
           - path: /
