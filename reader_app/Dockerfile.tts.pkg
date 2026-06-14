@@ -1,0 +1,40 @@
+# TTS backend using the PUBLIC kokoro package (Kokoro-82M weights pulled from
+# HuggingFace at build time). For hosts where the repo's vendored weights
+# aren't available. Build context = repo root.
+FROM python:3.11-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir flask flask-cors numpy soundfile kokoro "misaki[en]" espeakng-loader
+
+# Pre-fetch the spaCy model (misaki English G2P) and warm the Kokoro weights so
+# the pod is ready immediately and needs no network at runtime.
+RUN python -m spacy download en_core_web_sm || true
+RUN python - <<'PY' || true
+import espeakng_loader
+from phonemizer.backend.espeak.wrapper import EspeakWrapper
+EspeakWrapper.set_library(espeakng_loader.get_library_path())
+if hasattr(EspeakWrapper, "set_data_path"):
+    EspeakWrapper.set_data_path(espeakng_loader.get_data_path())
+from kokoro import KPipeline
+p = KPipeline(lang_code="a")
+list(p("warm up and cache the model weights", voice="af_heart"))
+PY
+
+COPY reader_app/tts_server.py /app/reader_app/tts_server.py
+
+WORKDIR /app/reader_app
+
+ENV TTS_ENGINE=kokoro-pkg \
+    TTS_VOICE=af_heart \
+    TTS_NUM_THREADS=4 \
+    TTS_PORT=5102 \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 5102
+CMD ["python", "tts_server.py"]
