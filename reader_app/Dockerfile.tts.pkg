@@ -7,6 +7,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
+# Give uid 1000 a real passwd entry: torch calls getpass.getuser() (getpwuid)
+# for its cache dir, which raises KeyError when running as an unlisted uid.
+RUN useradd -u 1000 -m -s /bin/bash app
+
 WORKDIR /app
 
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
@@ -39,6 +43,7 @@ ENV TTS_ENGINE=kokoro-pkg \
     TTS_VOICE=af_heart \
     TTS_NUM_THREADS=4 \
     TTS_PORT=5102 \
+    TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor \
     PYTHONUNBUFFERED=1
 
 EXPOSE 5102

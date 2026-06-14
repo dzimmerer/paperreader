@@ -7,6 +7,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
+# Give uid 1000 a passwd entry so libraries calling getpass.getuser() work when
+# the pod runs as a non-root, otherwise-unlisted uid.
+RUN useradd -u 1000 -m -s /bin/bash app
+
 WORKDIR /app
 
 RUN pip install --no-cache-dir \
