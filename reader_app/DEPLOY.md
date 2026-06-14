@@ -93,8 +93,23 @@ The TTS pod here uses the **public `kokoro` package** (`Dockerfile.tts.pkg`,
 time — so no model weights are shipped from a dev machine. `bench_tts.py`
 measures the real-time factor on the host.
 
-> Basic auth over plain HTTP sends credentials unencrypted. For real public use,
-> front it with TLS (e.g. a domain + cert-manager/Traefik or a reverse proxy).
+### TLS (HTTPS) via Traefik + cert-manager
+
+k3s bundles Traefik on ports 80/443. To serve HTTPS with an auto-renewing
+Let's Encrypt cert (see `k8s/tls-ingress.yaml`):
+
+```bash
+# 1) install cert-manager (once)
+sudo k3s kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+# 2) point a domain's A record at the server, edit host/email in tls-ingress.yaml, then:
+sudo k3s kubectl apply -f reader_app/k8s/tls-ingress.yaml
+```
+
+This serves `https://<host>` (443) with a cert issued via the ACME HTTP-01
+challenge (needs port 80 reachable from the internet) and redirects plain HTTP
+to HTTPS. cert-manager renews automatically. Live example: **https://dzim.site**.
+The `:30080` NodePort remains as a plain-HTTP fallback — close it (make the
+frontend Service `ClusterIP`) once you only use the ingress.
 
 ## Notes
 

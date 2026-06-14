@@ -1,0 +1,81 @@
+# TLS for the public deployment, via the k3s-bundled Traefik + cert-manager
+# (Let's Encrypt HTTP-01). Serves https://<host> on 443 and redirects 80->443.
+#
+# Prereqs (once):
+#   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+# Then edit the host / email below and apply this file. Requires port 80
+# reachable from the internet for the ACME challenge.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: d.zimmerer@dkfz-heidelberg.de
+    privateKeySecretRef:
+      name: letsencrypt-prod-account
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik
+---
+# Redirect plain HTTP to HTTPS.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-https
+  namespace: paperreader
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+# HTTPS (443): serve the frontend with the auto-issued Let's Encrypt cert.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend
+  namespace: paperreader
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [dzim.site]
+      secretName: dzim-site-tls
+  rules:
+    - host: dzim.site
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
+---
+# HTTP (80): redirect everything to HTTPS (also lets cert-manager solve ACME).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend-redirect
+  namespace: paperreader
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: paperreader-redirect-https@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: dzim.site
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
