@@ -20,7 +20,7 @@ WORKDIR /app
 # CPU-only torch wheel keeps the image far smaller than the default CUDA build.
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
     && pip install --no-cache-dir \
-        flask flask-cors numpy scipy soundfile phonemizer munch transformers
+        flask flask-cors numpy scipy soundfile phonemizer munch transformers gunicorn
 
 # kokoro/main.py loads the espeak-ng library from ESPEAK_LIBRARY (its default is
 # a macOS Homebrew path absent here). Pin it to the Linux .so via a stable,
@@ -41,4 +41,6 @@ ENV TTS_ENGINE=kokoro \
     PYTHONUNBUFFERED=1
 
 EXPOSE 5102
-CMD ["python", "tts_server.py"]
+# One worker = one Kokoro model in memory; threads for concurrency.
+CMD ["gunicorn", "--workers", "1", "--threads", "4", "--timeout", "300", \
+     "--bind", "0.0.0.0:5102", "tts_server:create_app()"]

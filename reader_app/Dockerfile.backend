@@ -10,7 +10,7 @@ RUN apt-get update \
 WORKDIR /app
 
 RUN pip install --no-cache-dir \
-    flask flask-cors requests beautifulsoup4 pylatexenc pymupdf4llm pypdf
+    flask flask-cors requests beautifulsoup4 pylatexenc pymupdf4llm pypdf gunicorn
 
 # Layout mirrors the repo so parsing.py's REPO_ROOT (parent of reader_app) works.
 COPY mathtex2text.py /app/mathtex2text.py
@@ -20,7 +20,12 @@ WORKDIR /app/reader_app
 
 ENV READER_PORT=5101 \
     TTS_URL=http://tts:5102 \
+    READER_DATA_DIR=/data/docs \
     PYTHONUNBUFFERED=1
 
 EXPOSE 5101
-CMD ["python", "server.py"]
+# Real multi-worker gunicorn: the document/audio store is on a shared filesystem
+# (READER_DATA_DIR), so all workers see the same data. gthread (threads>1) keeps
+# each worker responsive while a slow PDF parse or TTS fetch is in flight.
+CMD ["gunicorn", "--workers", "3", "--threads", "4", "--timeout", "300", \
+     "--bind", "0.0.0.0:5101", "server:create_app()"]
