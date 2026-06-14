@@ -13,12 +13,22 @@ spec:
       labels: { app: frontend }
     spec:
       enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: frontend
           image: paperreader-frontend:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
+          securityContext:
+            allowPrivilegeEscalation: false
+            # nginx master runs as root and only needs these to bind :80 and
+            # drop its workers to the nginx user; everything else is dropped.
+            capabilities:
+              drop: ["ALL"]
+              add: ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"]
           readinessProbe:
             httpGet: { path: /, port: 80 }
             initialDelaySeconds: 3

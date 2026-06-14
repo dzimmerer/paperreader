@@ -39,6 +39,11 @@ TTS_URL = os.environ.get("TTS_URL", "http://localhost:5102")
 TTS_TIMEOUT = 180
 PREFETCH_AHEAD = 3
 
+# Cap the on-disk store so it can't fill the disk. Oldest (least-recently-used)
+# documents are evicted when either limit is exceeded.
+MAX_DOCS = int(os.environ.get("READER_MAX_DOCS", "50"))
+MAX_STORE_BYTES = int(os.environ.get("READER_MAX_STORE_BYTES", str(5 * 1024**3)))  # 5 GiB
+
 # Per-word constant overhead (in weight units) so short words still get time
 WORD_BASE_WEIGHT = 2.0
 # Estimated leading silence in the synthesized audio (seconds)
@@ -99,6 +104,53 @@ def store_add(doc: dict[str, Any]) -> None:
     _atomic_write_json(os.path.join(d, "flat.json"), flat)
     # Write doc.json last: its presence marks the document as fully stored.
     _atomic_write_json(os.path.join(d, "doc.json"), doc)
+    evict_if_needed()
+
+
+def _dir_size(path: str) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass
+    return total
+
+
+def touch_doc(doc_id: str) -> None:
+    """Mark a document as recently used (for LRU eviction)."""
+    try:
+        os.utime(_doc_dir(doc_id), None)
+    except OSError:
+        pass
+
+
+def evict_if_needed() -> None:
+    """Delete least-recently-used documents until under the count/size caps."""
+    try:
+        entries = []
+        total = 0
+        for name in os.listdir(DATA_DIR):
+            d = os.path.join(DATA_DIR, name)
+            if not os.path.isdir(d):
+                continue
+            size = _dir_size(d)
+            total += size
+            entries.append((os.path.getmtime(d), size, d))
+        entries.sort()  # oldest mtime first
+        count = len(entries)
+        i = 0
+        while (count > MAX_DOCS or total > MAX_STORE_BYTES) and i < len(entries) - 1:
+            _mtime, size, d = entries[i]
+            import shutil
+
+            shutil.rmtree(d, ignore_errors=True)
+            total -= size
+            count -= 1
+            i += 1
+    except FileNotFoundError:
+        pass
 
 
 def store_doc(doc_id: str) -> Optional[dict[str, Any]]:
@@ -245,6 +297,7 @@ def create_app() -> Flask:
         doc = store_doc(doc_id)
         if doc is None:
             abort(404, description="Document not found")
+        touch_doc(doc_id)
         return jsonify(doc)
 
     @app.route("/api/doc/<doc_id>/img/<int:n>", methods=["GET"])
@@ -262,6 +315,7 @@ def create_app() -> Flask:
             abort(404, description="Document not found")
         if idx < 0 or idx >= len(flat):
             return jsonify({"error": "sentence index out of range"}), 404
+        touch_doc(doc_id)
         result = generate_audio_entry(doc_id, idx)
         prefetch(doc_id, idx + 1)
         if result is None:

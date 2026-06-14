@@ -12,6 +12,10 @@ WORKDIR /app
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
     && pip install --no-cache-dir flask flask-cors numpy soundfile kokoro "misaki[en]" espeakng-loader gunicorn
 
+# Cache weights under a fixed path that the non-root runtime user can read/write
+# (the pod runs as uid 1000 with a read-only root filesystem elsewhere).
+ENV HF_HOME=/opt/hfcache
+
 # Pre-fetch the spaCy model (misaki English G2P) and warm the Kokoro weights so
 # the pod is ready immediately and needs no network at runtime.
 RUN python -m spacy download en_core_web_sm || true
@@ -25,6 +29,7 @@ from kokoro import KPipeline
 p = KPipeline(lang_code="a")
 list(p("warm up and cache the model weights", voice="af_heart"))
 PY
+RUN chown -R 1000:1000 /opt/hfcache 2>/dev/null || true
 
 COPY reader_app/tts_server.py /app/reader_app/tts_server.py
 
