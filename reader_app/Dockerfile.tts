@@ -15,6 +15,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends espeak-ng libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
+# uid 1000 passwd entry so torch's getpass.getuser() works when running non-root.
+RUN useradd -u 1000 -m -s /bin/bash app
+
 WORKDIR /app
 
 # CPU-only torch wheel keeps the image far smaller than the default CUDA build.
