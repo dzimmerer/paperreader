@@ -6,11 +6,11 @@
 # causes a pause before every sentence. Running natively here gives ~4.7x
 # realtime (RTF ~0.21), so playback never waits.
 #
-# Pair with k8s/tts-native.yaml (ExternalName service) so the in-cluster backend
+# Pair with deploy/k8s/tts-native.yaml (ExternalName service) so the in-cluster backend
 # reaches this process via http://tts:5102 -> host.minikube.internal:5102.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."   # repo root (KokoroInterface loads kokoro/ from here)
+cd "$(dirname "$0")/../.."  # repo root (KokoroInterface loads kokoro/ from here)
 
 # Prefer the project's conda env; fall back to whatever python is on PATH.
 PY="${PYTHON:-/opt/homebrew/Caskroom/miniforge/base/envs/paperreader/bin/python}"

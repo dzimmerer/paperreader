@@ -17,8 +17,13 @@ reader_app/
 │                    # word-timing estimation, audio cache + prefetch,
 │                    # also serves the frontend
 ├── parsing.py       # URL resolution + arXiv-HTML / generic-HTML / PDF parsing
-└── frontend/        # Static website (no build step): rendering, playback,
-                     # play/pause/prev/next, sentence + word highlighting
+├── mathtex2text.py  # LaTeX -> spoken English (shared with legacy/)
+├── frontend/        # Static website (no build step): rendering, playback,
+│                    # play/pause/prev/next, sentence + word highlighting
+├── docker/          # Dockerfiles (Dockerfile.{backend,frontend,tts,tts.pkg})
+└── deploy/          # Deploy scripts + k8s manifests (see DEPLOY.md)
+    ├── deploy.sh  deploy-server.sh  run-native-tts.sh
+    └── k8s/
 ```
 
 Flow: the frontend POSTs a URL (or PDF) to `server.py`, which returns the paper

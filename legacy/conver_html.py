@@ -1,10 +1,21 @@
+from __future__ import annotations
+
+import os
 import re
-import time
+import sys
+from typing import Any
+
 import requests
-from bs4 import BeautifulSoup, NavigableString
-from markdownify import markdownify as md
-import markdown
+from bs4 import BeautifulSoup, NavigableString, Tag
 from tqdm import tqdm
+
+# The shared mathtex2text module lives in reader_app/ (used by the modern stack);
+# make it importable when this module is imported from legacy/.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_READER_APP = os.path.join(_REPO_ROOT, "reader_app")
+for _p in (_REPO_ROOT, _READER_APP):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from mathtex2text import latex_to_speech_with_latexwalker
 
@@ -27,47 +38,54 @@ from mathtex2text import latex_to_speech_with_latexwalker
 MIN_SENTENCE_LENGTH = 30
 MAX_SENTENCE_LENGTH = 150
 
+DivInfo = dict[str, Any]
+DivInfoMap = dict[str, DivInfo]
 
-def split_into_sentences(text):
-    # Split based on '.', '!', '?', and ensure boundaries are respected
+
+def split_into_sentences(text: str) -> list[str]:
+    """Split a block of text into readable sentence-like chunks."""
+
     sentence_endings = re.compile(r"(?<!\b(?:e\.g|i\.e))([.!?])\s+")
-    sentences = sentence_endings.split(text)
-    # Recombine the sentences and punctuation
-    sentences = ["".join(pair) for pair in zip(sentences[::2], sentences[1::2])]
-    # Further split sentences longer than MAX_SENTENCE_LENGTH characters by ','
-    final_sentences = []
-    for sentence in sentences:
-        if len(sentence) > 150:
+    parts = sentence_endings.split(text)
+    # Recombine alternating text and punctuation pieces from regex split
+    combined = ["".join(pair) for pair in zip(parts[::2], parts[1::2])]
+
+    final_sentences: list[str] = []
+    for sentence in combined:
+        if len(sentence) > MAX_SENTENCE_LENGTH:
             sub_sentences = sentence.split(",")
             for sub_sentence in sub_sentences:
-                sub_sentence = sub_sentence + ","
-                if len(sub_sentence) > MAX_SENTENCE_LENGTH:
-                    # Split after the first " " after MAX_SENTENCE_LENGTH chars
-                    split_index = sub_sentence.find(" ", MAX_SENTENCE_LENGTH)
+                candidate = f"{sub_sentence},"
+                if len(candidate) > MAX_SENTENCE_LENGTH:
+                    split_index = candidate.find(" ", MAX_SENTENCE_LENGTH)
                     if split_index != -1:
-                        final_sentences.append(sub_sentence[:split_index].strip())
-                        final_sentences.append(sub_sentence[split_index + 1 :].strip())
+                        final_sentences.append(candidate[:split_index].strip())
+                        final_sentences.append(candidate[split_index + 1 :].strip())
                     else:
-                        final_sentences.append(sub_sentence.strip())
+                        final_sentences.append(candidate.strip())
                 else:
-                    final_sentences.append(sub_sentence.strip())
+                    final_sentences.append(candidate.strip())
         else:
             final_sentences.append(sentence.strip())
-    return [s for s in final_sentences if s]
+    return [sentence for sentence in final_sentences if sentence]
 
 
-def split_text(text, min_length=MIN_SENTENCE_LENGTH, max_length=MAX_SENTENCE_LENGTH):
+def split_text(text: str, min_length: int = MIN_SENTENCE_LENGTH, max_length: int = MAX_SENTENCE_LENGTH) -> list[str]:
     # Step 1: Extract protected text and replace with placeholders
     protected_segments = re.findall(r"\$.*?\$", text)
-    temp_text = re.sub(r"\$.*?\$", lambda match: f"@@{protected_segments.index(match.group())}@@", text)
+
+    def _placeholder(match: re.Match[str]) -> str:
+        return f"@@{protected_segments.index(match.group())}@@"
+
+    temp_text = re.sub(r"\$.*?\$", _placeholder, text)
 
     # Step 2: Split text into chunks
     words = temp_text.split()
-    chunks = []
+    chunks: list[str] = []
     current_chunk = ""
     current_length = 0
 
-    for i, word in enumerate(words):
+    for word in words:
         if word == "##break##":
             # Split at the break point
             chunks.append(current_chunk.replace("##break##", "").strip())
@@ -106,16 +124,20 @@ def split_text(text, min_length=MIN_SENTENCE_LENGTH, max_length=MAX_SENTENCE_LEN
         chunks.append(current_chunk.strip())
 
     # Step 3: Restore protected text in the chunks
-    restored_chunks = []
+    restored_chunks: list[str] = []
+
+    def _restore(match: re.Match[str]) -> str:
+        return protected_segments[int(match.group(1))]
+
     for chunk in chunks:
-        restored_chunk = re.sub(r"@@(\d+)@@", lambda match: protected_segments[int(match.group(1))], chunk)
+        restored_chunk = re.sub(r"@@(\d+)@@", _restore, chunk)
         restored_chunks.append(restored_chunk)
 
     return restored_chunks
 
 
 # Recursive function to process each element's text content
-def process_element(soup, element, sentence_id=1):
+def process_element(soup: BeautifulSoup, element: Tag, sentence_id: int = 1) -> int:
     new_sentence_id = sentence_id
     # Iterate over children
     for child in element.contents:
@@ -135,7 +157,7 @@ def process_element(soup, element, sentence_id=1):
     return new_sentence_id
 
 
-def mark_words_in_html(html: str, words: list, start_index: int) -> tuple:
+def mark_words_in_html(html: str, words: list[str], start_index: int) -> tuple[str, int]:
     """
     Marks words in an HTML string with <mark> tags starting from a specific index.
 
@@ -208,22 +230,16 @@ def mark_words_in_html(html: str, words: list, start_index: int) -> tuple:
     return html, last_position_in_original
 
 
-def get_html(url):
+def get_html(url: str) -> tuple[list[str], DivInfoMap]:
+    response = requests.get(url, timeout=15)
+    response.raise_for_status()
+    html_content = response.text
 
-    response = requests.get(url)
-
-    if response.status_code == 200:
-        html_content = response.content
-    else:
-        raise Exception(f"Failed to fetch the page. Status code: {response.status_code}")
-
-    # Step 2: Parse the HTML using BeautifulSoup
     soup = BeautifulSoup(html_content, "html.parser")
 
-    # Step 3: Locate the "article" HTML tag
     article_tag = soup.find("article")
     if article_tag is None:
-        raise Exception("No 'article' tag found in the HTML.")
+        raise ValueError("No 'article' tag found in the HTML.")
 
     # # Step 4: Replace all math parts with their spoken text versions
     # for math_tag in article_tag.find_all("math"):
@@ -254,38 +270,42 @@ def get_html(url):
 
     div_ids_list.insert(0, "ltx_abstract")
 
-    # Get IDs and sort lexicographically
-    div_ids_dict = {
-        div["id"]: {
-            "id": div["id"],
+    div_ids_dict: DivInfoMap = {}
+    for div in divs_with_ltx_para:
+        div_id = div.get("id")
+        if not div_id:
+            continue
+        classes = div.get("class", [])
+        parent = div.parent if isinstance(div.parent, Tag) else None
+        title = ""
+        if parent:
+            heading = parent.find(["h1", "h2", "h3", "h4", "h5", "h6", "h7"], class_="ltx_title")
+            if heading is not None:
+                title = heading.get_text().strip()
+        div_ids_dict[div_id] = {
+            "id": div_id,
             "html": str(div),
             "div_obj": div,
-            "class": div["class"][0] if len(div["class"]) > 0 else "None",
+            "class": classes[0] if classes else "None",
             "type": "figure" if div.name == "figure" else "text",
-            "title": (
-                div.parent.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "h7"], class_="ltx_title")[0]
-                .get_text()
-                .strip()
-                if div.parent.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "h7"], class_="ltx_title")
-                else ""
-            ),
+            "title": title,
         }
-        for div in divs_with_ltx_para
-        if "id" in div.attrs
-    }
+
+    abstract_div = soup.find("div", class_="ltx_abstract")
+    abstract_title_tag = soup.find(["h1", "h2", "h3", "h4", "h5", "h6", "h7"], class_="ltx_title")
+    abstract_title = abstract_title_tag.get_text().strip()[:150] if abstract_title_tag else ""
 
     div_ids_dict["ltx_abstract"] = {
         "id": "ltx_abstract",
         "type": "abstract",
         "class": "ltx_abstract",
-        "html": str(soup.find("div", class_="ltx_abstract")),
-        "div_obj": soup.find("div", class_="ltx_abstract"),
-        "title": soup.find(["h1", "h2", "h3", "h4", "h5", "h6", "h7"], class_="ltx_title").get_text().strip()[:150]
-        + " (Abstract)",
+        "html": str(abstract_div) if abstract_div else "",
+        "div_obj": abstract_div,
+        "title": f"{abstract_title} (Abstract)" if abstract_title else "Abstract",
     }
 
     # Find the closest figure for each div
-    prev_figure_tag = None
+    prev_figure_tag: Tag | None = None
     for div_id, div_info in div_ids_dict.items():
         if div_info["type"] == "figure":
             div_info["figure"] = str(div_info["div_obj"])
@@ -293,6 +313,11 @@ def get_html(url):
             prev_figure_tag = div_info["div_obj"]
             continue
         div_obj = div_info["div_obj"]
+        if not isinstance(div_obj, Tag):
+            div_info["figure"] = str(prev_figure_tag) if prev_figure_tag else ""
+            div_info["figure_id"] = prev_figure_tag.get("id", "") if prev_figure_tag else ""
+            continue
+
         figure_tag = div_obj.find_next("figure", class_="ltx_figure")
         while figure_tag and not figure_tag.find("img"):
             figure_tag = figure_tag.find_next("figure", class_="ltx_figure")
@@ -310,6 +335,8 @@ def get_html(url):
         if div_info["type"] == "figure":
             continue
         div_obj = div_info["div_obj"]
+        if not isinstance(div_obj, Tag):
+            continue
         ltx_ref_links = div_obj.find_all("a", class_="ltx_ref")
         for link in ltx_ref_links:
             href = link.get("href", "")
@@ -335,12 +362,9 @@ def get_html(url):
 
     last_title = ""
 
-    remove_list = []
+    remove_list: list[str] = []
 
     for div_id, div_info in tqdm(div_ids_dict.items(), desc="Processing divs"):
-
-        if div_id == "A2.EGx1":
-            print("xD")
 
         div_html = div_info["html"]
         div_soup = BeautifulSoup(div_html, "html.parser")
@@ -351,19 +375,21 @@ def get_html(url):
         div_info_str = str(div_info["div_obj"])
         div_position = article_str.find(div_info_str)
 
-        prev_html = article_str[:div_position]
-        next_html = article_str[div_position + len(div_info_str) :]
+        if div_position == -1:
+            prev_html = article_str
+            next_html = ""
+        else:
+            prev_html = article_str[:div_position]
+            next_html = article_str[div_position + len(div_info_str) :]
 
         div_ids_dict[div_id]["prev_html"] = prev_html
         div_ids_dict[div_id]["next_html"] = next_html
 
         # Replace/ Remove all tables
         for table_tag in div_soup.find_all("table"):
-            if (
-                "ltx_equationgroup" not in table_tag["class"]
-                and "ltx_equation" not in table_tag["class"]
-                and "ltx_eqn_table" not in table_tag["class"]
-            ):
+            raw_classes = table_tag.get("class", [])
+            classes = raw_classes if isinstance(raw_classes, list) else [raw_classes]
+            if not any(cls in {"ltx_equationgroup", "ltx_equation", "ltx_eqn_table"} for cls in classes):
                 table_tag.replace_with("")
 
         # Replace all math parts with their spoken text versions
@@ -408,11 +434,8 @@ def get_html(url):
             spoken_sentences.append(spoken_sentence)
         div_ids_dict[div_id]["sentences_spoken"] = spoken_sentences
 
-        if div_id.startswith("S1.p5"):
-            print("xD")
-
         # Highlight each sentence / chunk in the div
-        highlighted_divs = []
+        highlighted_divs: list[str] = []
         start_highlight_index = 0
 
         filtered_div_html = BeautifulSoup(div_html, "html.parser")
@@ -490,38 +513,3 @@ def get_html(url):
 
     return div_ids_list, div_ids_dict
 
-
-if __name__ == "__main__":
-    url = "https://arxiv.org/html/2502.08769v1"
-
-    xd = get_html(url=url)
-
-    spoken_texts = []
-    for div_id in xd[0]:
-        for sentence in xd[1][div_id].get("sentences_spoken", []):
-            spoken_texts.append(sentence)
-
-    spoken_text = "\n".join(spoken_texts)
-
-    with open("spoken_text.txt", "w", encoding="utf-8") as f:
-        f.write(spoken_text)
-
-    response = requests.get(url)
-
-    if response.status_code == 200:
-        html_content = response.content
-    else:
-        raise Exception(f"Failed to fetch the page. Status code: {response.status_code}")
-
-    # Step 2: Parse the HTML using BeautifulSoup
-    soup = BeautifulSoup(html_content, "html.parser")
-
-    # Step 3: Locate the "article" HTML tag
-    article_tag = soup.find(id="bib")
-
-    bib_text = article_tag.get_text().replace("\n", " ").replace("  ", " ").strip()
-
-    with open("bib_text.txt", "w", encoding="utf-8") as f:
-        f.write(bib_text)
-
-    print(xd)

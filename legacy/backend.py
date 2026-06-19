@@ -13,18 +13,66 @@ Initial version keeps things in-memory (NOT production safe). Future improvement
 
 from __future__ import annotations
 
+import multiprocessing
+import sys
+
+# Reverting to 'spawn' (default on macOS) to avoid 'Double free' malloc errors
+# which occur when using 'fork' with multi-threaded libraries like torch/mlx.
+if sys.platform == "darwin":
+    try:
+        multiprocessing.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass
+
+
+def _patch_resource_tracker():
+    # The resource_tracker warning is often a false positive on macOS with
+    # libraries like torch/mlx. This patch prevents it from reporting leaks.
+    from multiprocessing import resource_tracker
+
+    def fix_register(name, rtype):
+        if rtype == "semaphore":
+            return
+        return resource_tracker._resource_tracker.register(name, rtype)
+
+    resource_tracker.register = fix_register
+
+    def fix_unregister(name, rtype):
+        if rtype == "semaphore":
+            return
+        return resource_tracker._resource_tracker.unregister(name, rtype)
+
+    resource_tracker.unregister = fix_unregister
+    if "semaphore" in resource_tracker._CLEANUP_FUNCS:
+        del resource_tracker._CLEANUP_FUNCS["semaphore"]
+
+
+_patch_resource_tracker()
+
+import os
+
+# This file lives in legacy/ but imports shared modules at the repo root
+# (kokoro/) and in reader_app/ (mathtex2text.py, via legacy/conver_html.py);
+# KokoroInterface opens kokoro weights via CWD-relative paths, so put the repo
+# root on sys.path and chdir into it.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+os.chdir(_REPO_ROOT)
+
 import io
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, Tuple, Optional
-
-from flask import Flask, jsonify, request, send_file, abort
-from flask_cors import CORS
+from typing import Any, Dict, Literal, Optional, Tuple
 
 import librosa
+from flask import Flask, abort, jsonify, request, send_file
+from flask.typing import ResponseReturnValue
+from flask_cors import CORS
 
+from chatterbox.interface import ChatterboxInterface
 from conver_html import get_html  # existing HTML parsing function
 from kokoro.interface import KokoroInterface  # existing TTS interface
 
@@ -32,12 +80,18 @@ SAMPLE_RATE = 44100
 DEFAULT_SPEED = 1.2
 MAX_AUDIO_CACHE = 40  # number of sentence audios to keep in memory per session
 
+# Global lock to prevent concurrent GPU access from multiple threads/sessions,
+# which can cause Metal (MTLCommandBuffer) assertion failures on macOS.
+_GLOBAL_TTS_LOCK = threading.Lock()
+
+PlayState = Literal["PAUSED", "PLAY"]
+
 
 @dataclass
 class ReadingStatus:
     div_idx: int = 0
     sentence_idx: int = 0
-    play_state: str = "PAUSED"  # or PLAY
+    play_state: PlayState = "PAUSED"
     speed: float = DEFAULT_SPEED
     created_at: float = field(default_factory=time.time)
 
@@ -45,14 +99,22 @@ class ReadingStatus:
 class ReadingSession:
     """Holds all state for a single reading session."""
 
-    def __init__(self, url: str):
+    def __init__(self, url: str, tts_engine: str = "chatterbox"):
         self.id = str(uuid.uuid4())
         self.url = self._normalize_url(url)
+        self.div_ids_list: list[str]
+        self.div_ids_dict: Dict[str, Dict[str, Any]]
         self.div_ids_list, self.div_ids_dict = get_html(url=self.url)
         self.status = ReadingStatus()
-        self.tts = KokoroInterface(voice_name="am")  # could parameterize
+
+        if tts_engine == "chatterbox":
+            self.tts = ChatterboxInterface()
+        else:
+            self.tts = KokoroInterface(voice_name="am")
+
         self.audio_cache: Dict[Tuple[int, int], bytes] = {}
         self.cache_lock = threading.Lock()
+        self.tts_lock = threading.Lock()
         self.shutdown_flag = False
         self.prefetch_thread = threading.Thread(target=self._prefetch_loop, daemon=True)
         self.prefetch_thread.start()
@@ -80,8 +142,7 @@ class ReadingSession:
             return div_idx, new_sentence_idx
         # skip empty sentence divs
         while (
-            new_div_idx < len(self.div_ids_list)
-            and len(self.div_ids_dict[self.div_ids_list[new_div_idx]]["sentences"]) == 0
+            new_div_idx < len(self.div_ids_list) and not self.div_ids_dict[self.div_ids_list[new_div_idx]]["sentences"]
         ):
             new_div_idx += 1
         if new_div_idx >= len(self.div_ids_list):
@@ -113,8 +174,10 @@ class ReadingSession:
     # ------------- Audio Generation -------------
     def _generate_audio_for(self, div_idx: int, sentence_idx: int) -> Optional[bytes]:
         key = (div_idx, sentence_idx)
-        if key in self.audio_cache:
-            return self.audio_cache[key]
+        with self.cache_lock:
+            if key in self.audio_cache:
+                return self.audio_cache[key]
+
         if div_idx >= len(self.div_ids_list):
             return None
         div_id = self.div_ids_list[div_idx]
@@ -130,12 +193,31 @@ class ReadingSession:
         if real_sentence.count("$") > 1:
             speed *= 0.8
         try:
-            # KokoroInterface.generate_audio expects integral speed? Cast conservatively
-            wav = self.tts.generate_audio(sentence_spoken, speed=int(round(speed)))
-            # Original assumed wav is 24000 sr
-            wav_resampled = librosa.resample(wav, orig_sr=24000, target_sr=SAMPLE_RATE)
-            cut_off = int(12000 * (1 / self.status.speed))
-            trimmed = wav_resampled[cut_off:-cut_off] if len(wav_resampled) > 2 * cut_off else wav_resampled
+            with self.tts_lock:
+                # Double check cache after acquiring TTS lock to avoid redundant generation
+                with self.cache_lock:
+                    if key in self.audio_cache:
+                        return self.audio_cache[key]
+
+                # Global lock to prevent Metal concurrency issues across sessions
+                with _GLOBAL_TTS_LOCK:
+                    # KokoroInterface.generate_audio expects integral speed?
+                    # ChatterboxInterface can take float.
+                    if isinstance(self.tts, KokoroInterface):
+                        wav = self.tts.generate_audio(sentence_spoken, speed=int(round(speed)))
+                    else:
+                        wav = self.tts.generate_audio(sentence_spoken, speed=speed)
+
+            orig_sr = self.tts.sample_rate
+            wav_resampled = librosa.resample(wav, orig_sr=orig_sr, target_sr=SAMPLE_RATE)
+
+            if isinstance(self.tts, KokoroInterface):
+                # Trim start/end silence for Kokoro-generated audio
+
+                cut_off = int(12000 * (1 / self.status.speed))
+                trimmed = wav_resampled[cut_off:-cut_off] if len(wav_resampled) > 2 * cut_off else wav_resampled
+            else:
+                trimmed = wav_resampled
             # Convert to WAV bytes
             import soundfile as sf  # local import to avoid global dependency issues
 
@@ -153,7 +235,7 @@ class ReadingSession:
         except Exception:
             return None
 
-    def _prefetch_loop(self):
+    def _prefetch_loop(self) -> None:
         # Continuously attempt to prefetch a few sentences ahead while session active
         while not self.shutdown_flag:
             current_div = self.status.div_idx
@@ -168,7 +250,7 @@ class ReadingSession:
             time.sleep(0.5)
 
     # ------------- Content Packaging -------------
-    def get_current_payload(self) -> Dict:
+    def get_current_payload(self) -> Dict[str, Any]:
         if self.status.div_idx >= len(self.div_ids_list):
             return {"end": True}
         div_id = self.div_ids_list[self.status.div_idx]
@@ -206,7 +288,7 @@ class ReadingSession:
         }
 
     # ------------- Navigation / Control -------------
-    def control(self, action: str):
+    def control(self, action: str) -> bool:
         if action == "play_pause":
             self.status.play_state = "PAUSED" if self.status.play_state == "PLAY" else "PLAY"
         elif action == "next_sentence":
@@ -225,7 +307,7 @@ class ReadingSession:
             return False
         return True
 
-    def adjust_speed(self, delta: float):
+    def adjust_speed(self, delta: float) -> None:
         self.status.speed = max(0.5, min(2.0, round(self.status.speed + delta, 2)))
         # clear cache so audio regenerated at new speed
         with self.cache_lock:
@@ -248,7 +330,7 @@ def create_app() -> Flask:
         return sess
 
     @app.route("/api/session", methods=["POST", "GET"])
-    def create_session():
+    def create_session() -> ResponseReturnValue:
         """Create a new reading session.
 
         POST: expects JSON body {"url": "..."}
@@ -256,40 +338,51 @@ def create_app() -> Flask:
         """
         if request.method == "POST":
             try:
-                data = request.get_json(force=True)
+                data_raw = request.get_json(force=True)
             except Exception:
                 return jsonify({"error": "Invalid JSON body"}), 400
-            url = (data or {}).get("url") if data else None
+            data: Dict[str, Any] = data_raw or {}
+            url = data.get("url")
         else:  # GET
             url = request.args.get("url")
 
         if not url:
             return jsonify({"error": "url required"}), 400
-        sess = ReadingSession(url=url)
+
+        tts_engine = (
+            data.get("tts_engine", "chatterbox")
+            if request.method == "POST"
+            else request.args.get("tts_engine", "chatterbox")
+        )
+
+        sess = ReadingSession(url=url, tts_engine=tts_engine)
         sessions[sess.id] = sess
-        return jsonify({"session_id": sess.id, "url": sess.url})
+        return jsonify({"session_id": sess.id, "url": sess.url, "tts_engine": tts_engine})
 
     @app.route("/api/session/<session_id>/state", methods=["GET"])
-    def get_state(session_id: str):
+    def get_state(session_id: str) -> ResponseReturnValue:
         sess = get_session_or_404(session_id)
         return jsonify(sess.get_current_payload())
 
     @app.route("/api/session/<session_id>/control", methods=["POST"])
-    def control(session_id: str):
+    def control(session_id: str) -> ResponseReturnValue:
         sess = get_session_or_404(session_id)
-        data = request.get_json(force=True)
+        data_raw = request.get_json(force=True)
+        data: Dict[str, Any] = data_raw or {}
         action = data.get("action")
         if action in {"speed_inc", "speed_dec"}:
             delta = 0.1 if action == "speed_inc" else -0.1
             sess.adjust_speed(delta)
             return jsonify({"ok": True, "speed": sess.status.speed})
+        if not isinstance(action, str):
+            return jsonify({"error": "action required"}), 400
         ok = sess.control(action)
         if not ok:
             return jsonify({"error": "Unknown action"}), 400
         return jsonify({"ok": True})
 
     @app.route("/api/session/<session_id>/audio", methods=["GET"])
-    def get_audio(session_id: str):
+    def get_audio(session_id: str) -> ResponseReturnValue:
         sess = get_session_or_404(session_id)
         try:
             div_idx = int(request.args.get("div_idx", sess.status.div_idx))
@@ -307,7 +400,7 @@ def create_app() -> Flask:
         return send_file(io.BytesIO(data), mimetype="audio/wav", as_attachment=False, download_name="audio.wav")
 
     @app.route("/api/session/<session_id>", methods=["DELETE"])
-    def delete_session(session_id: str):
+    def delete_session(session_id: str) -> ResponseReturnValue:
         sess = sessions.pop(session_id, None)
         if not sess:
             return jsonify({"error": "Not found"}), 404
@@ -315,7 +408,7 @@ def create_app() -> Flask:
         return jsonify({"ok": True})
 
     @app.route("/api/health", methods=["GET"])
-    def health():
+    def health() -> ResponseReturnValue:
         return jsonify({"status": "ok", "sessions": len(sessions)})
 
     return app
@@ -324,4 +417,4 @@ def create_app() -> Flask:
 if __name__ == "__main__":
     # Development entrypoint
     app = create_app()
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    app.run(host="0.0.0.0", port=5001, debug=False)

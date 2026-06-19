@@ -9,11 +9,9 @@ venv
 **/*.pyc
 **/node_modules
 *.wav
-frontend
-reader_app/frontend
-reader_app/k8s
-olds_assets
-assets
+legacy
+reader_app/deploy
+reader_app/docker
 podcast_transcript.json
 bib_text.txt
 spoken_text.txt
@@ -21,5 +19,4 @@ spoken_text.txt
 .DS_Store
 **/.DS_Store
 .claude
-chatterbox
 # kokoro/ is deliberately NOT excluded here.

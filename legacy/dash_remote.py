@@ -1,29 +1,76 @@
-import threading
-import random
-import time
+import multiprocessing
+import sys
+
+# Reverting to 'spawn' (default on macOS) to avoid 'Double free' malloc errors
+# which occur when using 'fork' with multi-threaded libraries like torch/mlx.
+if sys.platform == "darwin":
+    try:
+        multiprocessing.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass
+
+
+def _patch_resource_tracker():
+    # The resource_tracker warning is often a false positive on macOS with
+    # libraries like torch/mlx. This patch prevents it from reporting leaks.
+    from multiprocessing import resource_tracker
+
+    def fix_register(name, rtype):
+        if rtype == "semaphore":
+            return
+        return resource_tracker._resource_tracker.register(name, rtype)
+
+    resource_tracker.register = fix_register
+
+    def fix_unregister(name, rtype):
+        if rtype == "semaphore":
+            return
+        return resource_tracker._resource_tracker.unregister(name, rtype)
+
+    resource_tracker.unregister = fix_unregister
+    if "semaphore" in resource_tracker._CLEANUP_FUNCS:
+        del resource_tracker._CLEANUP_FUNCS["semaphore"]
+
+
+_patch_resource_tracker()
+
+import os
+
+# This file lives in legacy/ but imports shared modules at the repo root
+# (kokoro/) and in reader_app/ (mathtex2text.py, via legacy/conver_html.py);
+# KokoroInterface opens kokoro weights via CWD-relative paths, so put the repo
+# root on sys.path and chdir into it.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+os.chdir(_REPO_ROOT)
+
 import importlib
-
-from TTS.api import TTS
-import librosa
-import sounddevice as sd
-import soundcard as sc
-
-import dash
-from dash import dcc, html
-import dash_bootstrap_components as dbc
-import dash_dangerously_set_inner_html
-from dash.dependencies import Input, Output, State
-
-from conver_html import get_html
+import logging
+import random
+import threading
+import time
+import warnings
 from collections import deque
 
-import logging
+import dash
+import dash_bootstrap_components as dbc
+import dash_dangerously_set_inner_html
+import librosa
+import soundcard as sc
+import sounddevice as sd
+from dash import dcc, html
+from dash.dependencies import Input, Output, State
+from TTS.api import TTS
 
+from conver_html import get_html
 from kokoro.interface import KokoroInterface
-
 
 SAMPLE_RATE = 44100
 DEFAULT_SPEED = 1.2
+
+# Global lock to prevent concurrent GPU access
+_GLOBAL_TTS_LOCK = threading.Lock()
 
 
 class ReadingStatus:
@@ -44,7 +91,6 @@ def get_tts_model():
 
 
 def incr_sentence_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict):
-
     div_id = div_ids_list[div_idx]
     sentences = div_ids_dict[div_id]["sentences"]
 
@@ -69,7 +115,6 @@ def incr_sentence_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict):
 
 
 def decr_sentence_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict):
-
     new_sentence_idx = sentence_idx - 1
     new_div_idx = div_idx
     if new_sentence_idx < 0:
@@ -89,7 +134,6 @@ def decr_sentence_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict):
 
 
 def incr_div_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict):
-
     new_div_idx = div_idx + 1
     new_sentence_idx = 0
 
@@ -100,7 +144,6 @@ def incr_div_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict):
 
 
 def decr_div_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict):
-
     new_div_idx = div_idx - 1
     new_sentence_idx = 0
 
@@ -111,7 +154,6 @@ def decr_div_idx(div_idx, sentence_idx, div_ids_list, div_ids_dict):
 
 
 def get_next_selected_content(div_ids_list, div_ids_dict, div_idx, sentence_idx):
-
     div_id = div_ids_list[div_idx]
 
     sentences = div_ids_dict[div_id]["sentences"]
@@ -146,10 +188,10 @@ def get_next_selected_content(div_ids_list, div_ids_dict, div_idx, sentence_idx)
             f"<b>{sentences[sentence_idx]}</b>\n<br>{sentences[sentence_idx + 1]}\n{sentences[sentence_idx + 2]}\n"
         )
     elif sentence_idx == len(sentences) - 1:
-        html_sentences = f"{sentences[sentence_idx-1]}\n<br><b>{sentences[sentence_idx]}</b>\n"
+        html_sentences = f"{sentences[sentence_idx - 1]}\n<br><b>{sentences[sentence_idx]}</b>\n"
     else:
         html_sentences = (
-            f"{sentences[sentence_idx-1]}\n<br><b>{sentences[sentence_idx]}</b>\n<br>{sentences[sentence_idx + 1]}\n"
+            f"{sentences[sentence_idx - 1]}\n<br><b>{sentences[sentence_idx]}</b>\n<br>{sentences[sentence_idx + 1]}\n"
         )
 
     return {
@@ -167,7 +209,6 @@ def get_next_selected_content(div_ids_list, div_ids_dict, div_idx, sentence_idx)
 
 
 def get_selected_content(div_ids_list, div_ids_dict, div_idx, sentence_idx):
-
     div_id = div_ids_list[div_idx]
 
     sentences = div_ids_dict[div_id]["sentences"]
@@ -195,10 +236,10 @@ def get_selected_content(div_ids_list, div_ids_dict, div_idx, sentence_idx):
             f"<b>{sentences[sentence_idx]}</b>\n<br>{sentences[sentence_idx + 1]}\n{sentences[sentence_idx + 2]}\n"
         )
     elif sentence_idx == len(sentences) - 1:
-        html_sentences = f"{sentences[sentence_idx-1]}\n<br><b>{sentences[sentence_idx]}</b>\n"
+        html_sentences = f"{sentences[sentence_idx - 1]}\n<br><b>{sentences[sentence_idx]}</b>\n"
     else:
         html_sentences = (
-            f"{sentences[sentence_idx-1]}\n<br><b>{sentences[sentence_idx]}</b>\n<br>{sentences[sentence_idx + 1]}\n"
+            f"{sentences[sentence_idx - 1]}\n<br><b>{sentences[sentence_idx]}</b>\n<br>{sentences[sentence_idx + 1]}\n"
         )
 
     return {
@@ -215,9 +256,7 @@ def get_selected_content(div_ids_list, div_ids_dict, div_idx, sentence_idx):
 
 
 def thread_turn_sentence_to_audio(tts, wav_dict, div_ids_list, div_ids_dict, reading_status):
-
     while True:
-
         next_div_idx = reading_status.div_idx
         next_sentence_idx = reading_status.sentence_idx
 
@@ -242,7 +281,6 @@ def thread_turn_sentence_to_audio(tts, wav_dict, div_ids_list, div_ids_dict, rea
             next_div_id = div_ids_list[next_div_idx]
 
         try:
-
             if next_div_id == "#end":
                 time.sleep(1)
                 continue
@@ -258,13 +296,8 @@ def thread_turn_sentence_to_audio(tts, wav_dict, div_ids_list, div_ids_dict, rea
             print(f"Processing sentence: {real_sentence}")
             # time.sleep(1 + random.random() * 2)
 
-            # wav = tts.tts(
-            #     text=sentence,
-            #     # language="en",
-            #     split_sentences=True,
-            #     # speaker="p229",
-            # )
-            wav = tts.generate_audio(sentence, speed=read_speed)
+            with _GLOBAL_TTS_LOCK:
+                wav = tts.generate_audio(sentence, speed=read_speed)
 
             wav_resampled = librosa.resample(wav, orig_sr=24000, target_sr=SAMPLE_RATE)
 
@@ -285,7 +318,6 @@ def async_play_audio(wav_dict, next_queue, reading_status):
     while True:
         if reading_status.current_play_state == "PLAY":
             if reading_status.current_reading_status == "READY":
-
                 next_div_idx = reading_status.div_idx
                 next_sentence_idx = reading_status.sentence_idx
 
@@ -479,10 +511,14 @@ def set_app_layout(app, sec_title, html_left, html_right, html_bottom, prev_html
             ),
             # Polling interval to update the content
             dcc.Interval(  # A minimal interval to poll for updates
-                id="polling-content-interval", interval=200, n_intervals=0  # Milliseconds (0.1 seconds)
+                id="polling-content-interval",
+                interval=200,
+                n_intervals=0,  # Milliseconds (0.1 seconds)
             ),
             dcc.Interval(  # A minimal interval to poll for updates
-                id="polling-speech-interval", interval=50, n_intervals=0  # Milliseconds (0.1 seconds)
+                id="polling-speech-interval",
+                interval=50,
+                n_intervals=0,  # Milliseconds (0.1 seconds)
             ),
             dcc.Store(
                 id="scroll-enabled-store", storage_type="local", data=False
@@ -779,7 +815,6 @@ def add_html_update_callback(app, div_ids_list, div_ids_dict, reading_status):
 
 
 def init_app(url):
-
     print("1")
 
     # Initialize the app
@@ -855,7 +890,6 @@ def init_app(url):
 
 
 if __name__ == "__main__":
-
     # url = "https://arxiv.org/html/2412.06787v2"
     # url = "https://arxiv.org/html/2404.02905v2"
     url = "https://arxiv.org/html/2503.15485v1"

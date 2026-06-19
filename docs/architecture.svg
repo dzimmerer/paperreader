@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 470" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" text-rendering="geometricPrecision">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2f6fde"/>
+    </marker>
+    <style>
+      .box     { fill:#ffffff; stroke:#cbd2dc; stroke-width:1.4; }
+      .accent  { stroke:#2f6fde; }
+      .title   { font-size:15px; font-weight:700; fill:#0f172a; }
+      .sub     { font-size:11.5px; fill:#475569; }
+      .tag     { font-size:10.5px; fill:#64748b; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+      .flow    { font-size:11px; fill:#1d4ed8; font-weight:600; }
+      .flowsub { font-size:10px; fill:#64748b; }
+      .line    { stroke:#475569; stroke-width:1.5; fill:none; }
+      .line-a  { stroke:#2f6fde; stroke-width:1.8; fill:none; }
+    </style>
+  </defs>
+
+  <rect width="920" height="470" fill="#fafaf7"/>
+
+  <!-- Browser -->
+  <g>
+    <rect class="box" x="345" y="24" width="230" height="58" rx="10"/>
+    <text class="title" x="460" y="50" text-anchor="middle">Browser</text>
+    <text class="sub"  x="460" y="69" text-anchor="middle">renders paper · plays audio · word-highlight loop</text>
+  </g>
+
+  <!-- Tier 1: Frontend (nginx) -->
+  <g>
+    <rect class="box accent" x="40" y="150" width="240" height="120" rx="12"/>
+    <text class="title" x="160" y="178" text-anchor="middle">Frontend · nginx</text>
+    <text class="sub"  x="160" y="197" text-anchor="middle">static SPA + KaTeX math</text>
+    <line x1="60" y1="208" x2="260" y2="208" stroke="#e2e8f0"/>
+    <text class="tag" x="160" y="227" text-anchor="middle">reverse-proxy /api/ → backend</text>
+    <text class="tag" x="160" y="245" text-anchor="middle">rate-limit · 64MB upload cap</text>
+    <text class="tag" x="160" y="263" text-anchor="middle">TLS · basic-auth (server)</text>
+  </g>
+
+  <!-- Tier 2: Backend -->
+  <g>
+    <rect class="box accent" x="340" y="150" width="240" height="120" rx="12"/>
+    <text class="title" x="460" y="178" text-anchor="middle">Backend · Flask / gunicorn</text>
+    <text class="sub"  x="460" y="197" text-anchor="middle">parse · serve · cache · prefetch</text>
+    <line x1="360" y1="208" x2="560" y2="208" stroke="#e2e8f0"/>
+    <text class="tag" x="460" y="227" text-anchor="middle">arXiv HTML / ar5iv / PDF</text>
+    <text class="tag" x="460" y="245" text-anchor="middle">word-timing estimation</text>
+    <text class="tag" x="460" y="263" text-anchor="middle">SSRF guard · LRU store</text>
+  </g>
+
+  <!-- Tier 3: TTS -->
+  <g>
+    <rect class="box accent" x="640" y="150" width="240" height="120" rx="12"/>
+    <text class="title" x="760" y="178" text-anchor="middle">TTS · Flask / gunicorn</text>
+    <text class="sub"  x="760" y="197" text-anchor="middle">text → WAV + duration</text>
+    <line x1="660" y1="208" x2="860" y2="208" stroke="#e2e8f0"/>
+    <text class="tag" x="760" y="227" text-anchor="middle">Kokoro · Chatterbox(MLX)</text>
+    <text class="tag" x="760" y="245" text-anchor="middle">espeak-ng · macOS say</text>
+    <text class="tag" x="760" y="263" text-anchor="middle">cpu · cuda · mps</text>
+  </g>
+
+  <!-- Sources (parsing inputs) -->
+  <g>
+    <rect class="box" x="340" y="320" width="240" height="56" rx="10"/>
+    <text class="title" x="460" y="346" text-anchor="middle">Document sources</text>
+    <text class="sub"  x="460" y="365" text-anchor="middle">arXiv · ar5iv · any HTML · PDF upload</text>
+  </g>
+
+  <!-- Arrows: browser -> frontend -->
+  <path class="line-a" d="M420 82 C 420 110, 200 120, 160 150" marker-end="url(#arrow-accent)"/>
+  <text class="flow" x="250" y="112" text-anchor="middle">1 · load + play</text>
+
+  <!-- frontend -> backend -->
+  <path class="line-a" d="M280 210 L 340 210" marker-end="url(#arrow-accent)"/>
+  <text class="flow" x="310" y="201" text-anchor="middle">/api/</text>
+
+  <!-- backend -> tts -->
+  <path class="line-a" d="M580 210 L 640 210" marker-end="url(#arrow-accent)"/>
+  <text class="flow" x="610" y="201" text-anchor="middle">/tts</text>
+
+  <!-- browser -> backend (POST /api/doc) -->
+  <path class="line" d="M500 82 C 500 110, 470 120, 460 150" marker-end="url(#arrow)"/>
+  <text class="flowsub" x="525" y="118">2 · POST /api/doc {url}</text>
+
+  <!-- backend -> sources -->
+  <path class="line" d="M460 270 L 460 320" marker-end="url(#arrow)"/>
+  <text class="flowsub" x="486" y="298">3 · fetch + parse</text>
+
+  <!-- tts -> backend (return) label -->
+  <text class="flowsub" x="610" y="228" text-anchor="middle">audio+duration</text>
+
+  <!-- backend -> browser (audio) label -->
+  <text class="flowsub" x="416" y="148">4 · audio + word timings</text>
+
+  <!-- legend -->
+  <g transform="translate(40,410)">
+    <text class="sub" x="0" y="0">Legend:</text>
+    <line class="line-a" x1="60" y1="-4" x2="100" y2="-4" marker-end="url(#arrow-accent)"/>
+    <text class="flowsub" x="108" y="0">request path</text>
+    <line class="line" x1="210" y1="-4" x2="250" y2="-4" marker-end="url(#arrow)"/>
+    <text class="flowsub" x="258" y="0">data / parse</text>
+    <text class="flowsub" x="360" y="0">Ports: frontend 80 (30080) · backend 5101 · tts 5102</text>
+  </g>
+</svg>

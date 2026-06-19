@@ -2,9 +2,9 @@
 # Deploy Paper Reader to a single-node k3s cluster on this host and expose the
 # frontend on NodePort 30080 behind HTTP basic auth. Run on the SERVER, from
 # ~/paperreader (which must contain reader_app/, mathtex2text.py,
-# reader_app/Dockerfile.tts.pkg). Requires passwordless sudo.
+# reader_app/docker/Dockerfile.tts.pkg). Requires passwordless sudo.
 set -euo pipefail
-cd "$(dirname "$0")/.."          # -> ~/paperreader (repo-root-like layout)
+cd "$(dirname "$0")/../.."     # -> ~/paperreader (repo-root-like layout)
 ROOT="$(pwd)"
 NS=paperreader
 NODEPORT=30080
@@ -23,8 +23,8 @@ KC="sudo k3s kubectl"
 $KC get nodes
 
 echo "==================== 3/7 build backend + tts ===================="
-sudo docker build -t pr-backend:latest -f reader_app/Dockerfile.backend "$ROOT"
-sudo docker build -t pr-tts:latest     -f reader_app/Dockerfile.tts.pkg "$ROOT"
+sudo docker build -t pr-backend:latest -f reader_app/docker/Dockerfile.backend "$ROOT"
+sudo docker build -t pr-tts:latest     -f reader_app/docker/Dockerfile.tts.pkg "$ROOT"
 
 echo "==================== 4/7 build frontend (+basic auth) ===================="
 FE="$ROOT/fe-build"
