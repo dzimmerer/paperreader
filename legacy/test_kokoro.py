@@ -1,4 +1,43 @@
+import multiprocessing
+import sys
+
+# Reverting to 'spawn' (default on macOS) to avoid 'Double free' malloc errors
+# which occur when using 'fork' with multi-threaded libraries like torch/mlx.
+if sys.platform == "darwin":
+    try:
+        multiprocessing.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass
+
+def _patch_resource_tracker():
+    # The resource_tracker warning is often a false positive on macOS with 
+    # libraries like torch/mlx. This patch prevents it from reporting leaks.
+    from multiprocessing import resource_tracker
+    def fix_register(name, rtype):
+        if rtype == "semaphore": return
+        return resource_tracker._resource_tracker.register(name, rtype)
+    resource_tracker.register = fix_register
+    def fix_unregister(name, rtype):
+        if rtype == "semaphore": return
+        return resource_tracker._resource_tracker.unregister(name, rtype)
+    resource_tracker.unregister = fix_unregister
+    if "semaphore" in resource_tracker._CLEANUP_FUNCS:
+        del resource_tracker._CLEANUP_FUNCS["semaphore"]
+
+_patch_resource_tracker()
+
+import os
+
+# This file lives in legacy/ but uses shared modules at the repo root
+# (kokoro/) and opens kokoro weights + podcast_transcript.json via CWD-relative
+# paths, so put the repo root on sys.path and chdir into it.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+os.chdir(_REPO_ROOT)
+
 import json
+import warnings
 from kokoro.kokoro_model import build_model
 import torch
 import time

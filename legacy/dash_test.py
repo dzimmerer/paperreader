@@ -1,7 +1,47 @@
+import multiprocessing
+import sys
+
+# Reverting to 'spawn' (default on macOS) to avoid 'Double free' malloc errors
+# which occur when using 'fork' with multi-threaded libraries like torch/mlx.
+if sys.platform == "darwin":
+    try:
+        multiprocessing.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass
+
+def _patch_resource_tracker():
+    # The resource_tracker warning is often a false positive on macOS with 
+    # libraries like torch/mlx. This patch prevents it from reporting leaks.
+    from multiprocessing import resource_tracker
+    def fix_register(name, rtype):
+        if rtype == "semaphore": return
+        return resource_tracker._resource_tracker.register(name, rtype)
+    resource_tracker.register = fix_register
+    def fix_unregister(name, rtype):
+        if rtype == "semaphore": return
+        return resource_tracker._resource_tracker.unregister(name, rtype)
+    resource_tracker.unregister = fix_unregister
+    if "semaphore" in resource_tracker._CLEANUP_FUNCS:
+        del resource_tracker._CLEANUP_FUNCS["semaphore"]
+
+_patch_resource_tracker()
+
+import os
+
+# This file lives in legacy/ but imports shared modules at the repo root
+# (kokoro/) and in reader_app/ (mathtex2text.py, via legacy/conver_html.py);
+# KokoroInterface opens kokoro weights via CWD-relative paths, so put the repo
+# root on sys.path and chdir into it.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+os.chdir(_REPO_ROOT)
+
 import threading
 import random
 import time
 import importlib
+import warnings
 
 from TTS.api import TTS
 import librosa
@@ -25,6 +65,9 @@ from local_tts_interface import DockerTTSInterface
 
 SAMPLE_RATE = 44100
 DEFAULT_SPEED = 1.2
+
+# Global lock to prevent concurrent GPU access
+_GLOBAL_TTS_LOCK = threading.Lock()
 
 
 class ReadingStatus:
@@ -263,13 +306,8 @@ def thread_turn_sentence_to_audio(tts, wav_dict, div_ids_list, div_ids_dict, rea
             print(f"Processing sentence: {real_sentence}")
             # time.sleep(1 + random.random() * 2)
 
-            # wav = tts.tts(
-            #     text=sentence,
-            #     # language="en",
-            #     split_sentences=True,
-            #     # speaker="p229",
-            # )
-            wav = tts.generate_audio(sentence, speed=read_speed)
+            with _GLOBAL_TTS_LOCK:
+                wav = tts.generate_audio(sentence, speed=read_speed)
 
             wav_resampled = librosa.resample(wav, orig_sr=24000, target_sr=SAMPLE_RATE)
 

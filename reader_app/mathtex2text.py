@@ -1,10 +1,17 @@
-from pylatexenc.latexwalker import LatexWalker, LatexCharsNode, LatexMacroNode, LatexGroupNode, LatexMathNode
+from __future__ import annotations
+
+from pylatexenc.latexwalker import (
+    LatexWalker,
+    LatexCharsNode,
+    LatexMacroNode,
+    LatexGroupNode,
+    LatexMathNode,
+    LatexNode,
+)
 
 
-def process_latex_node(node):
-    """
-    Recursively process a LaTeX node and convert it into spoken text.
-    """
+def process_latex_node(node: LatexNode) -> str:
+    """Recursively process a LaTeX node and convert it into spoken text."""
     if isinstance(node, LatexCharsNode):
         # Plain text or symbols
         chars = node.chars
@@ -140,8 +147,7 @@ def process_latex_node(node):
         if node.nodelist:
             node_str = " ".join(process_latex_node(n) for n in node.nodelist)
             return node_str
-        else:
-            return ""
+        return ""
         # return process_latex_node(node.nodelist[0]) if node.nodelist else ""
     elif isinstance(node, LatexMathNode):
         # Process math mode expressions (e.g., $...$ or \[...\])
@@ -149,10 +155,8 @@ def process_latex_node(node):
     return ""
 
 
-def parse_superscripts_and_subscripts(latex_string):
-    """
-    Parse LaTeX superscripts (^) and subscripts (_) explicitly and convert them to spoken form.
-    """
+def parse_superscripts_and_subscripts(latex_string: str) -> str:
+    """Convert explicit LaTeX super/subscript markers into spoken fragments."""
     spoken = ""
     i = 0
     while i < len(latex_string):
@@ -193,10 +197,8 @@ def parse_superscripts_and_subscripts(latex_string):
     return spoken
 
 
-def latex_to_speech_with_latexwalker(latex_code):
-    """
-    Converts a LaTeX math string into spoken text using latexwalker for parsing.
-    """
+def latex_to_speech_with_latexwalker(latex_code: str) -> str:
+    """Convert a LaTeX math string into spoken text using latexwalker parsing."""
     walker = LatexWalker(latex_code)
     nodes, _, _ = walker.get_latex_nodes()
 

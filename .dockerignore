@@ -1,6 +1,7 @@
-# Keep build contexts small: only reader_app/ + mathtex2text.py are needed by
-# the container images. Exclude large model weights, audio, caches, and vendored
-# node modules.
+# Keep build contexts small: only reader_app/ Python files + frontend are needed
+# by the backend/frontend images; kokoro/ is needed only by the TTS image (kept
+# via docker/Dockerfile.tts.dockerignore). Exclude deploy/docker artifacts, large
+# model weights, audio, caches, and the legacy stack.
 .git
 .venv
 venv
@@ -11,12 +12,11 @@ venv
 *.json.bak
 kokoro/voices
 kokoro/*.pth
-olds_assets
-assets
-frontend
+legacy
+reader_app/deploy
+reader_app/docker
 podcast_transcript.json
 *.txt
-!requirements.txt
 !reader_app/requirements.txt
 .DS_Store
 **/.DS_Store

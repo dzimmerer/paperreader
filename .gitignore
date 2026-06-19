@@ -56,23 +56,28 @@ htmlcov/
 *.ogg
 *.opus
 
-# Model weights / large checkpoints (keep directory but ignore files)
-kokoro/voices/*.pt
-!kokoro/voices/.keep
-*.pth
+# Model weights / large checkpoints.
+# The large Kokoro model weight is NOT committed (download it separately);
+# the small voice packs in kokoro/voices/*.pt (~0.5 MB each) ARE shipped.
+kokoro/kokoro-v0_19.pth
+kokoro/*.pth
+!kokoro/voices/
 *.ckpt
 *.onnx
 
-# Temporary text outputs
+# Temporary text outputs / scratch dumps
 podcast_transcript.json
 spoken_text.txt
+bib_text.txt
 openai_output.wav
 output.wav
+/reqs.txt
 
 # ---- Node / Frontend ----
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
+# Covers both the legacy classic SPA (legacy/frontend) and any future frontends.
+**/node_modules/
+**/dist/
+**/.vite/
 *.tsbuildinfo
 
 # npm / yarn / pnpm logs
@@ -99,6 +104,7 @@ __MACOSX/
 .idea/
 *.iml
 .sourcemaps/
+.claude/
 
 # ---- Misc ----
 # Backup files
@@ -111,3 +117,7 @@ __MACOSX/
 
 # Generated audio chunk caches (if added later)
 audio_cache/
+
+# ---- Deployment-specific secrets / personal config ----
+# TLS ingress manifest holds a personal email + domain; keep it local.
+reader_app/deploy/k8s/tls-ingress.yaml

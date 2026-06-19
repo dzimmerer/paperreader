@@ -1,5 +1,5 @@
 # Parsing/serving backend: document API, word-timing estimation, audio cache.
-# Build context must be the REPO ROOT (needs ../mathtex2text.py).
+# Build context must be the REPO ROOT (needs reader_app/, incl. mathtex2text.py).
 FROM python:3.11-slim
 
 # tesseract is used by pymupdf4llm to OCR image-only PDF pages.
@@ -16,8 +16,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir \
     flask flask-cors requests beautifulsoup4 pylatexenc pymupdf4llm pypdf gunicorn
 
-# Layout mirrors the repo so parsing.py's REPO_ROOT (parent of reader_app) works.
-COPY mathtex2text.py /app/mathtex2text.py
+# mathtex2text.py now lives inside reader_app/ and is imported same-directory.
 COPY reader_app/ /app/reader_app/
 
 WORKDIR /app/reader_app

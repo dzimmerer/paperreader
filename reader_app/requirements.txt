@@ -3,7 +3,7 @@ flask
 flask-cors
 requests
 beautifulsoup4
-pylatexenc        # LaTeX -> spoken text (mathtex2text.py in repo root)
+pylatexenc        # LaTeX -> spoken text (mathtex2text.py, now in reader_app/)
 pymupdf4llm       # layout-aware PDF -> markdown (headings, columns, images, OCR)
 pypdf             # fallback PDF text extraction
 numpy

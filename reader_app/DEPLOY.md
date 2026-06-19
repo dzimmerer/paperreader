@@ -25,7 +25,7 @@ no CORS, and the frontend's relative URLs work unchanged.
 
 ```bash
 cd reader_app
-./deploy.sh                       # all-in-cluster (TTS container, CPU)
+./deploy/deploy.sh                   # all-in-cluster (TTS container, CPU)
 minikube service frontend -n paperreader   # opens the app in your browser
 ```
 
@@ -33,16 +33,16 @@ For **realtime** TTS on Apple Silicon, use native-TTS mode (see below):
 
 ```bash
 cd reader_app
-./deploy.sh --native-tts          # cluster talks to a host TTS
-./run-native-tts.sh               # separate terminal — keep running
+./deploy/deploy.sh --native-tts      # cluster talks to a host TTS
+./deploy/run-native-tts.sh           # separate terminal — keep running
 minikube service frontend -n paperreader
 ```
 
-`deploy.sh` starts minikube if needed, builds the three images **inside
+`deploy/deploy.sh` starts minikube if needed, builds the three images **inside
 minikube's Docker daemon** (`eval $(minikube docker-env)`, so no registry is
-required), applies the manifests in `k8s/`, and waits for the rollouts.
+required), applies the manifests in `deploy/k8s/`, and waits for the rollouts.
 
-Re-run `./deploy.sh` after any code change — it rebuilds and restarts the pods.
+Re-run `./deploy/deploy.sh` after any code change — it rebuilds and restarts the pods.
 
 ## Manual steps (what the script does)
 
@@ -50,11 +50,11 @@ Re-run `./deploy.sh` after any code change — it rebuilds and restarts the pods
 minikube start
 eval "$(minikube docker-env)"                       # build into the cluster's daemon
 
-docker build -t paperreader-tts:latest      -f Dockerfile.tts      ..
-docker build -t paperreader-backend:latest  -f Dockerfile.backend  ..
-docker build -t paperreader-frontend:latest -f Dockerfile.frontend ..
+docker build -t paperreader-tts:latest      -f docker/Dockerfile.tts      ..
+docker build -t paperreader-backend:latest  -f docker/Dockerfile.backend  ..
+docker build -t paperreader-frontend:latest -f docker/Dockerfile.frontend ..
 
-kubectl apply -f k8s/                                # namespace + 3 deploy/svc
+kubectl apply -f deploy/k8s/                         # namespace + 3 deploy/svc
 kubectl -n paperreader get pods
 minikube service frontend -n paperreader
 ```
@@ -79,7 +79,7 @@ Docker VM), you can run the whole stack in-cluster and expose it publicly:
 
 ```bash
 # on the server (needs passwordless sudo), with the app source under ~/paperreader
-./reader_app/deploy-server.sh
+./reader_app/deploy/deploy-server.sh
 ```
 
 It installs Docker + k3s, builds the three images, imports them into k3s, and
@@ -88,7 +88,7 @@ a random password printed at the end / stored in `~/paperreader/.reader_password
 Open the firewall for 30080 (the script does `ufw allow` if ufw is active; a
 provider-level firewall may also need it).
 
-The TTS pod here uses the **public `kokoro` package** (`Dockerfile.tts.pkg`,
+The TTS pod here uses the **public `kokoro` package** (`docker/Dockerfile.tts.pkg`,
 `TTS_ENGINE=kokoro-pkg`) which pulls Kokoro-82M weights from HuggingFace at build
 time — so no model weights are shipped from a dev machine. `bench_tts.py`
 measures the real-time factor on the host.
@@ -96,13 +96,13 @@ measures the real-time factor on the host.
 ### TLS (HTTPS) via Traefik + cert-manager
 
 k3s bundles Traefik on ports 80/443. To serve HTTPS with an auto-renewing
-Let's Encrypt cert (see `k8s/tls-ingress.yaml`):
+Let's Encrypt cert (see `deploy/k8s/tls-ingress.yaml`):
 
 ```bash
 # 1) install cert-manager (once)
 sudo k3s kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
 # 2) point a domain's A record at the server, edit host/email in tls-ingress.yaml, then:
-sudo k3s kubectl apply -f reader_app/k8s/tls-ingress.yaml
+sudo k3s kubectl apply -f reader_app/deploy/k8s/tls-ingress.yaml
 ```
 
 This serves `https://<host>` (443) with a cert issued via the ACME HTTP-01
@@ -124,16 +124,13 @@ frontend Service `ClusterIP`) once you only use the ingress.
 - **PDF uploads / long TTS calls.** nginx is configured with
   `client_max_body_size 64m` and a 300s proxy read timeout to accommodate
   large PDFs and first-request synthesis latency.
-- **PDF uploads / long TTS calls.** nginx is configured with
-  `client_max_body_size 64m` and a 300s proxy read timeout to accommodate
-  large PDFs and first-request synthesis latency.
 
 ## TTS engine & device
 
-The `tts` image ships **Kokoro** neural voices by default (`Dockerfile.tts`
-bundles `kokoro/` weights + voice packs; `Dockerfile.tts.dockerignore` keeps
+The `tts` image ships **Kokoro** neural voices by default (`docker/Dockerfile.tts`
+bundles `kokoro/` weights + voice packs; `docker/Dockerfile.tts.dockerignore` keeps
 them in the build context while the root `.dockerignore` excludes them from the
-backend/frontend images). Configure via env in `k8s/tts.yaml`:
+backend/frontend images). Configure via env in `deploy/k8s/tts.yaml`:
 
 | Env | Default | Notes |
 |-----|---------|-------|
@@ -163,14 +160,14 @@ So for realtime on Apple Silicon, run the TTS **natively** and let the cluster
 reach it:
 
 ```bash
-./deploy.sh --native-tts     # frontend+backend in-cluster; tts = ExternalName
-./run-native-tts.sh          # native Kokoro server on the host :5102
+./deploy/deploy.sh --native-tts  # frontend+backend in-cluster; tts = ExternalName
+./deploy/run-native-tts.sh       # native Kokoro server on the host :5102
 ```
 
-`k8s/tts-native.yaml` makes the `tts` service an **ExternalName** pointing at
+`deploy/k8s/tts-native.yaml` makes the `tts` service an **ExternalName** pointing at
 `host.minikube.internal`, so the backend's `TTS_URL=http://tts:5102` transparently
 routes to the host process — no backend change needed. Switch back to the
-all-in-cluster container with `./deploy.sh` (re-applies `tts.yaml`).
+all-in-cluster container with `./deploy/deploy.sh` (re-applies `deploy/k8s/tts.yaml`).
 
 ### GPU notes
 

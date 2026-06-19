@@ -31,17 +31,12 @@ import ipaddress
 import os
 import re
 import socket
-import sys
 import uuid
 from typing import Any, Optional
 from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup, NavigableString, Tag
-
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
 
 from mathtex2text import latex_to_speech_with_latexwalker  # noqa: E402
 

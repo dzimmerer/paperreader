@@ -1,0 +1,28 @@
+# Backend & HTML parsing
+Flask>=3.0,<4.0
+flask-cors>=4.0,<5.0
+requests>=2.32,<3.0
+beautifulsoup4>=4.12,<5.0
+tqdm>=4.66,<5.0
+pylatexenc>=2.10,<3.0
+librosa>=0.10
+soundfile>=0.12
+numpy>=1.24
+
+# Text-to-speech runtime
+phonemizer>=3.2
+torch>=2.2
+# torchaudio must match the installed torch build (CPU/GPU specific)
+torchaudio>=2.2
+
+# MLX (macOS only)
+mlx>=0.16.0
+mlx-audio>=0.2.0
+mlx-lm>=0.20.0
+misaki>=0.9.0
+einops>=0.8.0
+
+# Optional developer extras
+# dash>=2.18,<3.0
+# sounddevice>=0.5,<0.6
+# soundcard>=0.4,<0.5

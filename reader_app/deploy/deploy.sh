@@ -12,8 +12,9 @@
 # ~4.7x realtime. In native mode, start the host server with ./run-native-tts.sh.
 set -euo pipefail
 
-cd "$(dirname "$0")"
-REPO_ROOT="$(cd .. && pwd)"
+cd "$(dirname "$0")"            # reader_app/deploy/
+APP_DIR="$(cd .. && pwd)"       # reader_app/
+REPO_ROOT="$(cd ../.. && pwd)"  # repo root
 
 NATIVE_TTS=0
 [ "${1:-}" = "--native-tts" ] && NATIVE_TTS=1
@@ -27,10 +28,10 @@ echo "==> Pointing Docker at the minikube daemon..."
 eval "$(minikube docker-env)"
 
 echo "==> Building images (context: $REPO_ROOT)..."
-docker build -t paperreader-backend:latest  -f Dockerfile.backend  "$REPO_ROOT"
-docker build -t paperreader-frontend:latest -f Dockerfile.frontend "$REPO_ROOT"
+docker build -t paperreader-backend:latest  -f "$APP_DIR/docker/Dockerfile.backend"  "$REPO_ROOT"
+docker build -t paperreader-frontend:latest -f "$APP_DIR/docker/Dockerfile.frontend" "$REPO_ROOT"
 if [ "$NATIVE_TTS" -eq 0 ]; then
-  docker build -t paperreader-tts:latest -f Dockerfile.tts "$REPO_ROOT"
+  docker build -t paperreader-tts:latest -f "$APP_DIR/docker/Dockerfile.tts" "$REPO_ROOT"
 fi
 
 echo "==> Applying Kubernetes manifests..."

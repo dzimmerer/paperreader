@@ -3,9 +3,9 @@
 # ~4.7x realtime, vs ~0.6x for the in-VM container on Apple Silicon).
 #
 # Use INSTEAD of tts.yaml:
-#   ./run-native-tts.sh                       # start Kokoro on the host :5102
+#   ./deploy/run-native-tts.sh                # start Kokoro on the host :5102
 #   kubectl delete deploy tts -n paperreader  # (if the container tts is running)
-#   kubectl apply -f k8s/tts-native.yaml
+#   kubectl apply -f deploy/k8s/tts-native.yaml
 #
 # The backend keeps TTS_URL=http://tts:5102 unchanged; this ExternalName service
 # resolves `tts` to the host gateway so requests reach the native server.
